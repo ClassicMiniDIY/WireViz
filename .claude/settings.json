@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/colegentry/Development/**)",
+      "Bash(find:*)",
+      "Bash(cargo init:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo build:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/colegentry/Development"
+    ]
+  }
+}

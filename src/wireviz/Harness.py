@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 
 import re
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from itertools import zip_longest
 from pathlib import Path
-from typing import Any, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from graphviz import Graph
 from wireviz import APP_NAME, APP_URL, __version__, wv_colors
@@ -19,7 +20,7 @@ from wireviz.DataClasses import (
     Side,
     Tweak,
 )
-from wireviz.svgembed import embed_svg_images, embed_svg_images_file
+from wireviz.svgembed import embed_svg_images
 from wireviz.wv_bom import (
     HEADER_MPN,
     HEADER_PN,
@@ -603,12 +604,12 @@ class Harness:
                                     f'( +)?{attr}=("[^"]*"|[^] ]*)(?(1)| *)', "", entry
                                 )
                                 if n_subs < 1:
-                                    print(
-                                        f"Harness.create_graph() warning: {attr} not found in {keyword}!"
+                                    sys.stderr.write(
+                                        f"Harness.create_graph() warning: {attr} not found in {keyword}!\n"
                                     )
                                 elif n_subs > 1:
-                                    print(
-                                        f"Harness.create_graph() warning: {attr} removed {n_subs} times in {keyword}!"
+                                    sys.stderr.write(
+                                        f"Harness.create_graph() warning: {attr} removed {n_subs} times in {keyword}!\n"
                                     )
                                 continue
 
@@ -622,8 +623,8 @@ class Harness:
                                 # If attr not found, then append it
                                 entry = re.sub(r"\]$", f" {attr}={value}]", entry)
                             elif n_subs > 1:
-                                print(
-                                    f"Harness.create_graph() warning: {attr} overridden {n_subs} times in {keyword}!"
+                                sys.stderr.write(
+                                    f"Harness.create_graph() warning: {attr} overridden {n_subs} times in {keyword}!\n"
                                 )
 
                         dot.body[i] = entry
@@ -670,54 +671,113 @@ class Harness:
 
     def output(
         self,
-        filename: (str, Path),
+        filename: Optional[Union[str, Path]],
+        fmt: tuple = ("html", "png", "svg", "tsv"),
         view: bool = False,
         cleanup: bool = True,
-        fmt: tuple = ("html", "png", "svg", "tsv"),
+        output_dir: Optional[Union[str, Path]] = None,
+        output_name: Optional[str] = None,
     ) -> None:
-        # graphical output
-        graph = self.graph
-        svg_already_exists = Path(
-            f"{filename}.svg"
-        ).exists()  # if SVG already exists, do not delete later
-        # graphical output
-        for f in fmt:
-            if f in ("png", "svg", "html"):
-                if f == "html":  # if HTML format is specified,
-                    f = "svg"  # generate SVG for embedding into HTML
-                # SVG file will be renamed/deleted later
-                _filename = f"{filename}.tmp" if f == "svg" else filename
-                # TODO: prevent rendering SVG twice when both SVG and HTML are specified
-                graph.format = f
-                graph.render(filename=_filename, view=view, cleanup=cleanup)
-        # embed images into SVG output
-        if "svg" in fmt or "html" in fmt:
-            embed_svg_images_file(f"{filename}.tmp.svg")
-        # GraphViz output
-        if "gv" in fmt:
-            graph.save(filename=f"{filename}.gv")
-        # BOM output
-        bomlist = bom_list(self.bom())
-        if "tsv" in fmt:
-            file_write_text(f"{filename}.bom.tsv", tuplelist2tsv(bomlist))
+        """Render the harness in the requested formats.
+
+        When ``filename`` is a path, each requested format is written to
+        ``{filename}.{ext}`` (with ``.bom.tsv`` for the BOM). When
+        ``filename`` is None, exactly one format must be requested and
+        its bytes/text are written to stdout — supports piping the CLI
+        into other tools.
+        """
+        outputs: Dict[str, Union[str, bytes]] = self._render(
+            fmt,
+            output_dir=output_dir,
+            output_name=output_name,
+        )
+
         if "csv" in fmt:
-            # TODO: implement CSV output (preferrably using CSV library)
-            print("CSV output is not yet supported")
-        # HTML output
-        if "html" in fmt:
-            generate_html_output(
-                filename, bomlist, self.metadata, self.options, self.source_path
-            )
-        # PDF output
+            # TODO: implement CSV output (preferably using CSV library)
+            sys.stderr.write("CSV output is not yet supported\n")
         if "pdf" in fmt:
             # TODO: implement PDF output
-            print("PDF output is not yet supported")
-        # delete SVG if not needed
-        if "html" in fmt and not "svg" in fmt:
-            # SVG file was just needed to generate HTML
-            Path(f"{filename}.tmp.svg").unlink()
-        elif "svg" in fmt:
-            Path(f"{filename}.tmp.svg").replace(f"{filename}.svg")
+            sys.stderr.write("PDF output is not yet supported\n")
+
+        if filename is None:
+            # stdout mode — emit each rendered format in the user-requested order
+            for f in fmt:
+                content = outputs.get(f)
+                if content is None:
+                    continue
+                if isinstance(content, (bytes, bytearray)):
+                    sys.stdout.buffer.write(content)
+                else:
+                    sys.stdout.write(content)
+            return
+
+        suffix_map = {"tsv": "bom.tsv"}
+        for f, content in outputs.items():
+            ext = suffix_map.get(f, f)
+            out_path = f"{filename}.{ext}"
+            if isinstance(content, (bytes, bytearray)):
+                Path(out_path).write_bytes(content)
+            else:
+                file_write_text(out_path, content)
+
+    def _render(
+        self,
+        fmt: tuple,
+        output_dir: Optional[Union[str, Path]] = None,
+        output_name: Optional[str] = None,
+    ) -> Dict[str, Union[str, bytes]]:
+        """Produce in-memory representations of each requested format.
+
+        Pipes graphviz once per binary output rather than via ``render()``
+        + temporary files so the caller can write files OR pipe to stdout
+        without the SVG-file roundtrip the previous implementation used.
+        """
+        import base64
+
+        graph = self.graph
+        outputs: Dict[str, Union[str, bytes]] = {}
+
+        svg_str: Optional[str] = None
+        if "svg" in fmt or "html" in fmt:
+            svg_str = embed_svg_images(
+                graph.pipe(format="svg").decode("utf-8"), Path.cwd()
+            )
+            if "svg" in fmt:
+                outputs["svg"] = svg_str
+
+        png_bytes: Optional[bytes] = None
+        if "png" in fmt:
+            png_bytes = graph.pipe(format="png")
+            outputs["png"] = png_bytes
+
+        if "gv" in fmt:
+            outputs["gv"] = graph.source
+
+        if "tsv" in fmt or "html" in fmt:
+            bomlist = bom_list(self.bom())
+            if "tsv" in fmt:
+                outputs["tsv"] = tuplelist2tsv(bomlist)
+            if "html" in fmt:
+                # Inline PNG as base64 in the HTML only when the PNG was
+                # rendered in this same call; otherwise let the template
+                # fall back to reading {output_dir}/{output_name}.png.
+                png_b64 = (
+                    f"data:image/png;base64, {base64.b64encode(png_bytes).decode('utf-8')}"
+                    if png_bytes is not None
+                    else None
+                )
+                outputs["html"] = generate_html_output(
+                    svg_str,
+                    bomlist,
+                    self.metadata,
+                    self.options,
+                    output_dir=output_dir,
+                    output_name=output_name,
+                    png_b64=png_b64,
+                    source_path=self.source_path,
+                )
+
+        return outputs
 
     def bom(self):
         if not self._bom:

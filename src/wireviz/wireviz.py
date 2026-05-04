@@ -94,11 +94,18 @@ def parse(
         raise TypeError(
             f"Expected a dict as top-level YAML input, but got: {type(yaml_data)}"
         )
-    if output_formats:
+    write_to_stdout = (
+        output_formats and (str(output_dir) == "-" or str(output_name) == "-")
+    )
+    if output_formats and not write_to_stdout:
         # need to write data to file, determine output directory and filename
         output_dir = _get_output_dir(yaml_file, output_dir)
         output_name = _get_output_name(yaml_file, output_name)
         output_file = output_dir / output_name
+    else:
+        output_dir = None
+        output_name = None
+        output_file = None
 
     if yaml_file:
         # if reading from file, ensure that input file's parent directory is included in image_paths
@@ -397,10 +404,10 @@ def parse(
     used_components = set(designators_and_templates.values())
     forgotten_components = [c for c in proposed_components if not c in used_components]
     if len(forgotten_components) > 0:
-        print(
-            "Warning: The following components are not referenced in any connection set:"
+        sys.stderr.write(
+            "Warning: The following components are not referenced in any connection set:\n"
         )
-        print(", ".join(forgotten_components))
+        sys.stderr.write(", ".join(forgotten_components) + "\n")
 
     # harness population completed =============================================
 
@@ -409,7 +416,20 @@ def parse(
             harness.add_bom_item(line)
 
     if output_formats:
-        harness.output(filename=output_file, fmt=output_formats, view=False)
+        if write_to_stdout:
+            if len(output_formats) != 1:
+                raise ValueError(
+                    "Exactly one output format must be specified when writing to stdout."
+                )
+            harness.output(filename=None, fmt=output_formats, view=False)
+        else:
+            harness.output(
+                filename=output_file,
+                fmt=output_formats,
+                view=False,
+                output_dir=output_dir,
+                output_name=output_name,
+            )
 
     if return_types:
         returns = []
@@ -447,8 +467,8 @@ def _get_yaml_data_and_path(inp: Union[str, Path, Dict]) -> (Dict, Path):
             from errno import EINVAL, ENAMETOOLONG
 
             if type(e) is OSError and e.errno not in (EINVAL, ENAMETOOLONG, None):
-                print(
-                    f"OSError(errno={e.errno}) in Python {sys.version} at {platform.platform()}"
+                sys.stderr.write(
+                    f"OSError(errno={e.errno}) in Python {sys.version} at {platform.platform()}\n"
                 )
                 raise e
             # file does not exist; assume inp is a YAML string
@@ -485,7 +505,7 @@ def _get_output_name(input_file: Path, default_output_name: Path) -> str:
 
 
 def main():
-    print("When running from the command line, please use wv_cli.py instead.")
+    sys.stderr.write("When running from the command line, please use wv_cli.py instead.\n")
 
 
 if __name__ == "__main__":

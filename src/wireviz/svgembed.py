@@ -54,13 +54,3 @@ def get_mime_subtype(filename: Union[str, Path]) -> str:
     return mime_subtype
 
 
-def embed_svg_images_file(
-    filename_in: Union[str, Path], overwrite: bool = True
-) -> None:
-    filename_in = Path(filename_in).resolve()
-    filename_out = filename_in.with_suffix(".b64.svg")
-    filename_out.write_text(  # TODO?: Verify xml encoding="utf-8" in SVG?
-        embed_svg_images(filename_in.read_text(), filename_in.parent)
-    )  # TODO: Use encoding="utf-8" in both read_text() and write_text()
-    if overwrite:
-        filename_out.replace(filename_in)

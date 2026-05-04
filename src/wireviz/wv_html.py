@@ -10,36 +10,40 @@ from wireviz.svgembed import data_URI_base64
 from wireviz.wv_gv_html import html_line_breaks
 from wireviz.wv_helper import (
     file_read_text,
-    file_write_text,
     flatten2d,
     smart_file_resolve,
 )
 
 
 def generate_html_output(
-    filename: Union[str, Path],
+    svg_input: Union[str, None],
     bom_list: List[List[str]],
     metadata: Metadata,
     options: Options,
-    source: Union[str, Path, None] = None,
-):
+    output_dir: Union[str, Path, None] = None,
+    output_name: Union[str, None] = None,
+    png_b64: Union[str, None] = None,
+    source_path: Union[str, Path, None] = None,
+) -> str:
     # load HTML template
     templatename = metadata.get("template", {}).get("name")
-    template_search_paths = [
-        Path(filename).parent,
-        Path(__file__).parent / "templates",
-    ]
-    if source is not None:
-        template_search_paths.insert(0, Path(source).parent)
+    builtin_template_dir = Path(__file__).parent / "templates"
     if templatename:
-        # if relative path to template was provided, check the YAML source's
-        # directory first, then the output directory, then the built-in templates
+        # custom template lookup order: directory of the input YAML
+        # (source_path), then the output directory, then the built-in
+        # templates shipped with WireViz.
+        search_paths = [builtin_template_dir]
+        if output_dir is not None:
+            search_paths.insert(0, Path(output_dir))
+        if source_path is not None:
+            search_paths.insert(0, Path(source_path).parent)
         templatefile = smart_file_resolve(
-            f"{templatename}.html", template_search_paths
+            f"{templatename}.html",
+            search_paths,
         )
     else:
         # fall back to built-in simple template if no template was provided
-        templatefile = Path(__file__).parent / "templates/simple.html"
+        templatefile = builtin_template_dir / "simple.html"
 
     html = file_read_text(templatefile)  # TODO?: Warn if unexpected meta charset?
 
@@ -48,7 +52,7 @@ def generate_html_output(
         return re.sub(  # TODO?: Verify xml encoding="utf-8" in SVG?
             "^<[?]xml [^?>]*[?]>[^<]*<!DOCTYPE [^>]*>",
             "<!-- XML and DOCTYPE declarations from SVG file removed -->",
-            file_read_text(f"{filename}.tmp.svg"),
+            svg_input or "",
             1,
         )
 
@@ -82,13 +86,20 @@ def generate_html_output(
         + "</table>\n"
     )
 
+    if output_dir is not None and output_name is not None:
+        full_filename = str(Path(output_dir) / output_name)
+        filename_stem = output_name
+    else:
+        full_filename = ""
+        filename_stem = ""
+
     # prepare simple replacements
     replacements = {
         "<!-- %generator% -->": f"{APP_NAME} {__version__} - {APP_URL}",
         "<!-- %fontname% -->": options.fontname,
         "<!-- %bgcolor% -->": wv_colors.translate_color(options.bgcolor, "hex"),
-        "<!-- %filename% -->": str(filename),
-        "<!-- %filename_stem% -->": Path(filename).stem,
+        "<!-- %filename% -->": full_filename,
+        "<!-- %filename_stem% -->": filename_stem,
         "<!-- %bom% -->": bom_html,
         "<!-- %bom_reversed% -->": bom_html_reversed,
         "<!-- %sheet_current% -->": "1",  # TODO: handle multi-page documents
@@ -104,9 +115,13 @@ def generate_html_output(
             replacements[key] = func()
 
     replacement_if_used("<!-- %diagram% -->", svgdata)
-    replacement_if_used(
-        "<!-- %diagram_png_b64% -->", lambda: data_URI_base64(f"{filename}.png")
-    )
+    if png_b64 is not None:
+        replacement_if_used("<!-- %diagram_png_b64% -->", lambda: png_b64)
+    elif full_filename:
+        replacement_if_used(
+            "<!-- %diagram_png_b64% -->",
+            lambda: data_URI_base64(f"{full_filename}.png"),
+        )
 
     # prepare metadata replacements
     if metadata:
@@ -132,6 +147,4 @@ def generate_html_output(
     replacements_sorted = sorted(replacements, key=len, reverse=True)
     replacements_escaped = map(re.escape, replacements_sorted)
     pattern = re.compile("|".join(replacements_escaped))
-    html = pattern.sub(lambda match: replacements[match.group(0)], html)
-
-    file_write_text(f"{filename}.html", html)
+    return pattern.sub(lambda match: replacements[match.group(0)], html)

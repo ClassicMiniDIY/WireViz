@@ -369,8 +369,15 @@ def parse(
     # carry loopback wires is still a legitimate part of the harness and
     # must not be silently dropped as an "unused template".
     auto_loop_connectors = []
+    used_templates = set(designators_and_templates.values())
     for template_name, attribs in template_connectors.items():
+        # already instantiated as a literal designator
         if template_name in harness.connectors:
+            continue
+        # already used as a template via Template.Designator syntax — its
+        # loops are already on each instance and we don't want a phantom
+        # floating connector named after the template.
+        if template_name in used_templates:
             continue
         if attribs.get("loops"):
             harness.add_connector(name=template_name, **attribs)

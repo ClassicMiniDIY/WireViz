@@ -418,7 +418,7 @@ def parse(
     if output_formats:
         if write_to_stdout:
             if len(output_formats) != 1:
-                raise Exception(
+                raise ValueError(
                     "Exactly one output format must be specified when writing to stdout."
                 )
             harness.output(filename=None, fmt=output_formats, view=False)

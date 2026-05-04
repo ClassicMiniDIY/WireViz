@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 
+import base64
 import re
 import sys
 from collections import Counter
 from dataclasses import dataclass
 from itertools import zip_longest
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from graphviz import Graph
 from wireviz import APP_NAME, APP_URL, __version__, wv_colors
@@ -672,7 +673,7 @@ class Harness:
     def output(
         self,
         filename: Optional[Union[str, Path]],
-        fmt: tuple = ("html", "png", "svg", "tsv"),
+        fmt: Union[str, Tuple[str, ...], List[str]] = ("html", "png", "svg", "tsv"),
         view: bool = False,
         cleanup: bool = True,
         output_dir: Optional[Union[str, Path]] = None,
@@ -686,6 +687,8 @@ class Harness:
         its bytes/text are written to stdout — supports piping the CLI
         into other tools.
         """
+        if isinstance(fmt, str):
+            fmt = (fmt,)
         outputs: Dict[str, Union[str, bytes]] = self._render(
             fmt,
             output_dir=output_dir,
@@ -722,7 +725,7 @@ class Harness:
 
     def _render(
         self,
-        fmt: tuple,
+        fmt: Union[str, Tuple[str, ...], List[str]],
         output_dir: Optional[Union[str, Path]] = None,
         output_name: Optional[str] = None,
     ) -> Dict[str, Union[str, bytes]]:
@@ -732,15 +735,25 @@ class Harness:
         + temporary files so the caller can write files OR pipe to stdout
         without the SVG-file roundtrip the previous implementation used.
         """
-        import base64
-
+        if isinstance(fmt, str):
+            fmt = (fmt,)
         graph = self.graph
         outputs: Dict[str, Union[str, bytes]] = {}
 
         svg_str: Optional[str] = None
         if "svg" in fmt or "html" in fmt:
+            # Resolve relative <image src=...> references against the YAML
+            # source's directory when known; fall back to cwd. (In practice
+            # wireviz.parse() rewrites relative image paths to absolute
+            # during YAML parse, so this base path only matters for SVG
+            # produced from already-rendered Harness objects or when a
+            # tweak injects a post-parse relative path.)
+            if self.source_path is not None and str(self.source_path) != "-":
+                base_path: Path = Path(self.source_path).parent
+            else:
+                base_path = Path.cwd()
             svg_str = embed_svg_images(
-                graph.pipe(format="svg").decode("utf-8"), Path.cwd()
+                graph.pipe(format="svg").decode("utf-8"), base_path
             )
             if "svg" in fmt:
                 outputs["svg"] = svg_str

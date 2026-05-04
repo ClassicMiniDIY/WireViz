@@ -109,7 +109,7 @@ def wireviz(file, format, prepend, output_dir, output_name, version):
 
     write_to_stdout = str(output_dir) == "-" or str(output_name) == "-"
     if write_to_stdout and len(output_formats) != 1:
-        raise Exception(
+        raise click.UsageError(
             "Exactly one output format (-f) must be specified when writing to stdout."
         )
 

@@ -678,6 +678,7 @@ class Harness:
         cleanup: bool = True,
         output_dir: Optional[Union[str, Path]] = None,
         output_name: Optional[str] = None,
+        template_dir: Optional[Union[str, Path]] = None,
     ) -> None:
         """Render the harness in the requested formats.
 
@@ -693,6 +694,7 @@ class Harness:
             fmt,
             output_dir=output_dir,
             output_name=output_name,
+            template_dir=template_dir,
         )
 
         if "csv" in fmt:
@@ -728,6 +730,7 @@ class Harness:
         fmt: Union[str, Tuple[str, ...], List[str]],
         output_dir: Optional[Union[str, Path]] = None,
         output_name: Optional[str] = None,
+        template_dir: Optional[Union[str, Path]] = None,
     ) -> Dict[str, Union[str, bytes]]:
         """Produce in-memory representations of each requested format.
 
@@ -788,6 +791,7 @@ class Harness:
                     output_name=output_name,
                     png_b64=png_b64,
                     source_path=self.source_path,
+                    template_dir=template_dir,
                 )
 
         return outputs

@@ -31,6 +31,7 @@ def parse(
     output_dir: Union[str, Path] = None,
     output_name: Union[None, str] = None,
     image_paths: Union[Path, str, List] = [],
+    source_path: Union[Path, str, None] = None,
 ) -> Any:
     """
     This function takes an input, parses it as a WireViz Harness file,
@@ -115,6 +116,7 @@ def parse(
         metadata=Metadata(**yaml_data.get("metadata", {})),
         options=Options(**yaml_data.get("options", {})),
         tweak=Tweak(**yaml_data.get("tweak", {})),
+        source_path=source_path,
     )
     # others
     # store mapping of components to their respective template
@@ -361,6 +363,31 @@ def parse(
                     elif "=" in designator and index_entry == 0:
                         # mate two connectors as a whole
                         harness.add_mate_component(from_name, to_name, designator)
+
+    # Auto-instantiate any declared connector that has loops but was not
+    # referenced in a connection set. A connector whose only purpose is to
+    # carry loopback wires is still a legitimate part of the harness and
+    # must not be silently dropped as an "unused template".
+    auto_loop_connectors = []
+    used_templates = set(designators_and_templates.values())
+    for template_name, attribs in template_connectors.items():
+        # already instantiated as a literal designator
+        if template_name in harness.connectors:
+            continue
+        # already used as a template via Template.Designator syntax — its
+        # loops are already on each instance and we don't want a phantom
+        # floating connector named after the template.
+        if template_name in used_templates:
+            continue
+        if attribs.get("loops"):
+            harness.add_connector(name=template_name, **attribs)
+            designators_and_templates[template_name] = template_name
+            auto_loop_connectors.append(template_name)
+    if auto_loop_connectors:
+        print(
+            "Info: auto-instantiating loop-only connector(s) not referenced"
+            " in any connection set: " + ", ".join(auto_loop_connectors)
+        )
 
     # warn about unused templates
 

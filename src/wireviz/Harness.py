@@ -70,6 +70,7 @@ class Harness:
     metadata: Metadata
     options: Options
     tweak: Tweak
+    source_path: Path = None
 
     def __post_init__(self):
         self.connectors = {}
@@ -190,6 +191,10 @@ class Harness:
             if not (connector.ports_left or connector.ports_right):
                 connector.ports_left = True  # Use left side pins.
 
+            # Resolve per-loop sides *before* the pin table is built so
+            # loop pins are guaranteed to activate the correct port column.
+            loop_sides = connector.resolve_loops()
+
             html = []
             # fmt: off
             rows = [[f'{html_bgcolor(connector.bgcolor_title)}{remove_links(connector.name)}'
@@ -271,25 +276,28 @@ class Harness:
 
             if len(connector.loops) > 0:
                 dot.attr("edge", color="#000000:#ffffff:#000000")
-                if connector.ports_left:
-                    loop_side = "l"
-                    loop_dir = "w"
-                elif connector.ports_right:
-                    loop_side = "r"
-                    loop_dir = "e"
-                else:
-                    raise Exception("No side for loops")
-                for loop in connector.loops:
+                for loop, (side_a, side_b) in zip(connector.loops, loop_sides):
+                    # Pin port IDs are 1-based positions in the pin table,
+                    # NOT pin numbers (see the pin HTML emission above,
+                    # `port="p{pinindex+1}..."`). Translate pin numbers to
+                    # positions the same way cable and mate edges do
+                    # (self.connectors[...].pins.index(pin) + 1).
+                    pos_a = connector.pins.index(loop[0]) + 1
+                    pos_b = connector.pins.index(loop[1]) + 1
+                    s_a = "l" if side_a == Side.LEFT else "r"
+                    s_b = "l" if side_b == Side.LEFT else "r"
+                    d_a = "w" if side_a == Side.LEFT else "e"
+                    d_b = "w" if side_b == Side.LEFT else "e"
                     dot.edge(
-                        f"{connector.name}:p{loop[0]}{loop_side}:{loop_dir}",
-                        f"{connector.name}:p{loop[1]}{loop_side}:{loop_dir}",
+                        f"{connector.name}:p{pos_a}{s_a}:{d_a}",
+                        f"{connector.name}:p{pos_b}{s_b}:{d_b}",
                         label=" ",  # Work-around to avoid over-sized loops.
                     )
 
         # determine if there are double- or triple-colored wires in the harness;
         # if so, pad single-color wires to make all wires of equal thickness
         pad = any(
-            len(colorstr) > 2
+            len(get_color_hex(colorstr)) > 1
             for cable in self.cables.values()
             for colorstr in cable.colors
         )
@@ -697,7 +705,9 @@ class Harness:
             print("CSV output is not yet supported")
         # HTML output
         if "html" in fmt:
-            generate_html_output(filename, bomlist, self.metadata, self.options)
+            generate_html_output(
+                filename, bomlist, self.metadata, self.options, self.source_path
+            )
         # PDF output
         if "pdf" in fmt:
             # TODO: implement PDF output

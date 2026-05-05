@@ -30,6 +30,7 @@ from wireviz.wv_bom import (
     component_table_entry,
     generate_bom,
     get_additional_component_table,
+    make_list,
     pn_info_string,
 )
 from wireviz.wv_colors import get_color_hex, translate_color
@@ -84,9 +85,49 @@ class Harness:
     def add_connector(self, name: str, *args, **kwargs) -> None:
         check_old(f"Connector '{name}'", OLD_CONNECTOR_ATTR, kwargs)
         self.connectors[name] = Connector(name, *args, **kwargs)
+        self._extend_tweak(self.connectors[name])
 
     def add_cable(self, name: str, *args, **kwargs) -> None:
         self.cables[name] = Cable(name, *args, **kwargs)
+        self._extend_tweak(self.cables[name])
+
+    def _extend_tweak(self, node: Union[Connector, Cable]) -> None:
+        """Fold ``node.tweak`` into ``self.tweak`` after substituting the
+        node's name for the placeholder string.
+
+        Per-connector / per-cable ``tweak:`` entries let users author a
+        single template and have its ``override`` keys / ``append`` lines
+        rewritten with the actual designator at instantiation time. This
+        is the only place the placeholder substitution happens — the
+        global tweak is applied unchanged at graph emission time.
+        """
+        if not node.tweak:
+            return
+        ph = node.tweak.placeholder
+        # An empty string is a legal value to opt out of the global
+        # placeholder; only None falls back.
+        if ph is None:
+            ph = self.tweak.placeholder
+        rph = (lambda s: s.replace(ph, node.name)) if ph else (lambda s: s)
+
+        n_override = node.tweak.override or {}
+        s_override = self.tweak.override or {}
+        for ident, n_dict in n_override.items():
+            ident = rph(ident)
+            s_dict = s_override.get(ident, {})
+            for k, v in n_dict.items():
+                k, v = rph(k), rph(v)
+                if k in s_dict and v != s_dict[k]:
+                    raise ValueError(
+                        f"{node.name}.tweak.override.{ident}.{k} conflicts with another"
+                    )
+                s_dict[k] = v
+            s_override[ident] = s_dict or None
+        self.tweak.override = s_override or None
+        self.tweak.append = (
+            make_list(self.tweak.append)
+            + [rph(v) for v in make_list(node.tweak.append)]
+        ) or None
 
     def add_mate_pin(self, from_name, from_pin, to_name, to_pin, arrow_type) -> None:
         self.mates.append(MatePin(from_name, from_pin, to_name, to_pin, arrow_type))

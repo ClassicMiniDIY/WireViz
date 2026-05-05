@@ -85,6 +85,9 @@ tweak:  # optional tweaking of .gv output
   # loops
   loops: <List>  # every list item is itself a list of exactly two pins
                  # on the connector that are to be shorted
+
+  # optional tweaking of .gv output executed for each instance of this connector
+  tweak:  # see tweak section below
 ```
 
 ## Cable attributes
@@ -148,6 +151,8 @@ tweak:  # optional tweaking of .gv output
   show_wirecount: <bool>    # defaults to true
   show_wirenumbers: <bool>  # defaults to true for cables; false for bundles
 
+  # optional tweaking of .gv output executed for each instance of this cable
+  tweak:  # see tweak section below
 ```
 
 ## Connection sets
@@ -456,6 +461,12 @@ Alternatively items can be added to just the BOM by putting them in the section 
   # Optional tweaking of the .gv output.
   # This feature is experimental and might change
   # or be removed in future versions.
+
+  placeholder: <str>  # Substring to be replaced with the node name in
+    # any per-connector / per-cable tweak overrides and append entries.
+    # An empty string disables placeholder substitution for that node.
+    # When omitted at the per-node level, the global placeholder
+    # (in the top-level tweak: section) is used as the fallback.
 
   override:  # dict of .gv entries to override
     # Each entry is identified by its leading string

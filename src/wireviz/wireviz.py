@@ -77,6 +77,17 @@ def parse(
             Paths to use when resolving any image paths included in the data.
             Note: If inp is a path to a YAML file,
             its parent directory will automatically be included in the list.
+        source_path (Path | str, optional):
+            Path of the originating YAML file when ``inp`` is a string or dict.
+            Used to: (1) resolve a custom ``metadata.template.name`` reference
+            against the source's directory, and (2) resolve relative
+            ``<image src=...>`` paths embedded in graphviz output.
+            When ``inp`` is itself a Path, this is filled in automatically.
+        template_dir (Path | str, optional):
+            Explicit first-priority directory to search when resolving a
+            ``metadata.template.name`` reference. Searched before the YAML
+            source directory and the output directory; the built-in
+            templates ship as the final fallback.
 
     Returns:
         Depending on the return_types parameter, may return:

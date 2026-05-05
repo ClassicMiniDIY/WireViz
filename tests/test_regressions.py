@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from click.testing import CliRunner
 from PIL import Image
 
 from wireviz.DataClasses import Cable, Options
@@ -125,17 +124,15 @@ def test_pr1_review_loop_template_with_designator_no_phantom(
 # ===========================================================================
 
 
-def test_pr321_stdout_writes_svg_text(minimal_yaml: Path):
+def test_pr321_stdout_writes_svg_text(runner, minimal_yaml: Path):
     """Single-format stdout writes the rendered text to ``sys.stdout``."""
-    runner = CliRunner()
     result = runner.invoke(cli, ["-f", "s", "-O", "-", str(minimal_yaml)])
     assert result.exit_code == 0
     assert result.stdout.lstrip().startswith("<?xml")
 
 
-def test_pr321_stdout_writes_png_bytes(minimal_yaml: Path):
+def test_pr321_stdout_writes_png_bytes(runner, minimal_yaml: Path):
     """Single-format stdout writes PNG bytes to ``sys.stdout.buffer``."""
-    runner = CliRunner()
     result = runner.invoke(cli, ["-f", "p", "-O", "-", str(minimal_yaml)])
     assert result.exit_code == 0
     # CliRunner exposes binary stdout via .stdout_bytes
@@ -151,10 +148,9 @@ def test_pr321_review_fmt_str_normalized_to_tuple(minimal_yaml: Path):
     assert "svg" in outputs and isinstance(outputs["svg"], str)
 
 
-def test_pr321_review_log_to_stderr(minimal_yaml: Path):
+def test_pr321_review_log_to_stderr(runner, minimal_yaml: Path):
     """PR #2 review fix. CLI log lines go to stderr so piped stdout
     stays a valid SVG/PNG/etc."""
-    runner = CliRunner()
     result = runner.invoke(cli, ["-f", "s", "-O", "-", str(minimal_yaml)])
     assert "WireViz" in result.stderr  # banner on stderr
     assert "WireViz" not in result.stdout.lstrip("<")[:100]  # not on stdout
@@ -166,13 +162,12 @@ def test_pr321_review_log_to_stderr(minimal_yaml: Path):
 
 
 def test_pr444_template_dir_first_in_search_order(
-    custom_template_yaml: Path, custom_template_dir: Path, workdir: Path
+    runner, custom_template_yaml: Path, custom_template_dir: Path, workdir: Path
 ):
     """Upstream PR #444. ``-t`` adds an explicit directory to the
     front of the template search path."""
     yaml_target = workdir / "in.yml"
     yaml_target.write_text(custom_template_yaml.read_text())
-    runner = CliRunner()
     result = runner.invoke(
         cli,
         ["-f", "h", "-t", str(custom_template_dir), str(yaml_target)],
@@ -292,12 +287,11 @@ def test_pr234_review_im_info_preserved_through_embed(workdir: Path):
     assert dpi is not None and abs(dpi[0] - 192.0) < 0.1
 
 
-def test_pr234_review_corrupt_png_clean_error(workdir: Path):
+def test_pr234_review_corrupt_png_clean_error(runner, workdir: Path):
     """PR #5 review fix. A non-PNG file with a .png suffix fed as input
     raises ``click.UsageError`` rather than spewing a stack trace."""
     fake = workdir / "fake.png"
     fake.write_text("definitely not a PNG")
-    runner = CliRunner()
     result = runner.invoke(cli, ["-f", "s", str(fake)])
     assert result.exit_code == 2
     assert "Could not read PNG" in result.stderr
@@ -463,10 +457,9 @@ def test_pr10_review_data_uri_no_leading_space():
         os.unlink(tmp)
 
 
-def test_pr10_review_unknown_format_uses_click_usage_error(minimal_yaml: Path):
+def test_pr10_review_unknown_format_uses_click_usage_error(runner, minimal_yaml: Path):
     """PR #10 review fix. Unknown -f code raises click.UsageError,
     not a generic Exception."""
-    runner = CliRunner()
     result = runner.invoke(cli, ["-f", "X", str(minimal_yaml)])
     assert result.exit_code == 2
     # click.UsageError adds the canonical "Try 'wireviz -h' for help."
@@ -481,10 +474,9 @@ def test_pr10_review_source_path_autofills(minimal_yaml: Path):
     assert Path(h.source_path).resolve() == minimal_yaml.resolve()
 
 
-def test_pr10_review_missing_input_clean_error(workdir: Path):
+def test_pr10_review_missing_input_clean_error(runner, workdir: Path):
     """PR #10 review fix (extension). 'File does not exist' on input
     was a generic Exception too; now click.UsageError."""
-    runner = CliRunner()
     result = runner.invoke(cli, [str(workdir / "missing.yml")])
     assert result.exit_code == 2
     assert "does not exist" in result.stderr.lower()

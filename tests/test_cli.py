@@ -9,17 +9,14 @@ people notice.
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
 
 from wireviz.Harness import read_yaml_from_png
 from wireviz.wv_cli import wireviz as cli
 
 
-@pytest.fixture
-def runner():
-    # mix_stderr was removed in Click 8.3; modern CliRunner always
-    # exposes stderr separately via ``result.stderr``.
-    return CliRunner()
+# Tests in this file use the ``cli_runner`` fixture from conftest.py
+# rather than instantiating CliRunner directly, so the Click 8.0-8.2
+# vs 8.3+ ``mix_stderr`` API drift is handled in one place.
 
 
 # --- Basic file-mode invocations --------------------------------------------

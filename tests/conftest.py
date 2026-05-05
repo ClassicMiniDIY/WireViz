@@ -95,3 +95,23 @@ def workdir(tmp_path: Path, monkeypatch) -> Path:
     relative-path behavior can use the temp dir as cwd."""
     monkeypatch.chdir(tmp_path)
     return tmp_path
+
+
+@pytest.fixture
+def runner():
+    """Click ``CliRunner`` with stderr captured separately, regardless
+    of which Click version is installed.
+
+    * Click 8.0-8.2 needs ``mix_stderr=False`` explicitly.
+    * Click 8.3+ removed the parameter and made separate-capture the
+      always-on default — passing it raises ``TypeError``.
+
+    Tests need separate stderr to assert on banner / error-footer
+    messages, so the fallback ladder isolates that from Click drift.
+    """
+    from click.testing import CliRunner
+
+    try:
+        return CliRunner(mix_stderr=False)
+    except TypeError:
+        return CliRunner()

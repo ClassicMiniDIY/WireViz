@@ -6,19 +6,16 @@ the stdin/stdout pipe."""
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
 
 from wireviz.Harness import read_yaml_from_png
 from wireviz.wireviz import parse
 from wireviz.wv_cli import wireviz as cli
 
 
-def test_png_yaml_round_trip_via_cli(workdir: Path, minimal_yaml: Path):
+def test_png_yaml_round_trip_via_cli(runner, workdir: Path, minimal_yaml: Path):
     """Render YAML → PNG-with-embedded-source → feed PNG back to CLI →
     rendered output uses the same harness model. This is the
     load-bearing workflow for the planned wireviz-gui."""
-    runner = CliRunner()
-
     target = workdir / "orig.yml"
     target.write_text(minimal_yaml.read_text())
 
@@ -56,10 +53,9 @@ def test_png_yaml_round_trip_byte_identical_yaml(
     assert extracted == yaml_text
 
 
-def test_stdin_to_stdout_svg_roundtrip(minimal_yaml: Path):
+def test_stdin_to_stdout_svg_roundtrip(runner, minimal_yaml: Path):
     """``cat harness.yml | wireviz -f s -O - -`` produces a valid SVG
     on stdout."""
-    runner = CliRunner()
     yaml_text = minimal_yaml.read_text()
     result = runner.invoke(
         cli,
@@ -71,9 +67,8 @@ def test_stdin_to_stdout_svg_roundtrip(minimal_yaml: Path):
     assert "X1" in result.stdout
 
 
-def test_stdin_to_stdout_png_roundtrip(minimal_yaml: Path):
+def test_stdin_to_stdout_png_roundtrip(runner, minimal_yaml: Path):
     """Same pipeline but binary PNG output."""
-    runner = CliRunner()
     yaml_text = minimal_yaml.read_text()
     result = runner.invoke(
         cli,

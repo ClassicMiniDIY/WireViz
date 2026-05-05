@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import copy
 import platform
 import sys
 from pathlib import Path
@@ -513,8 +514,6 @@ def _get_yaml_data_and_path(
         # text form for round-trip embedding into PNG output, and
         # deep-copy so the parsing pipeline's in-place expansion of
         # the connections section doesn't leak back to the caller.
-        import copy
-
         yaml_data = copy.deepcopy(inp)
         yaml_path = None
         yaml_str = yaml.safe_dump(inp, sort_keys=False, allow_unicode=True)

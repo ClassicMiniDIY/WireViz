@@ -64,7 +64,11 @@ def build_generated(groupkeys):
         # collect and iterate input YAML files
         for yaml_file in collect_filenames("Building", key, input_extensions):
             print(f'  "{yaml_file}"')
-            wireviz.parse(yaml_file, output_formats=("gv", "html", "png", "svg", "tsv"))
+            wireviz.parse(
+                yaml_file,
+                output_formats=("gv", "html", "png", "svg", "tsv"),
+                embed_yaml=False,  # keep example PNG bytes deterministic
+            )
 
             if build_readme:
                 i = "".join(filter(str.isdigit, yaml_file.stem))

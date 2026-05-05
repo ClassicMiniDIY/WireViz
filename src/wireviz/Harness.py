@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import base64
+import io
 import re
 import sys
 from collections import Counter
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from graphviz import Graph
+from PIL import Image as PILImage
+from PIL.PngImagePlugin import PngInfo
 from wireviz import APP_NAME, APP_URL, __version__, wv_colors
 from wireviz.DataClasses import (
     Cable,
@@ -58,6 +61,51 @@ OLD_CONNECTOR_ATTR = {
     "pinnumbers": "was renamed to 'pins' in v0.2",
     "autogenerate": "is replaced with new syntax in v0.4",
 }
+
+# iTXt chunk key used to embed the source YAML in rendered PNGs for
+# round-trip editing. The "wireviz:" prefix avoids collision with PNG
+# software-defined keywords or other tools' chunks.
+PNG_YAML_CHUNK_KEY = "wireviz:yaml"
+
+
+def _embed_yaml_in_png(png_bytes: bytes, yaml_source: str) -> bytes:
+    """Re-encode PNG bytes with the YAML source stored in an iTXt chunk.
+
+    Pillow's PNG write path does not natively support adding a single
+    chunk to an existing file, so this decodes and re-encodes. To keep
+    the round-trip non-destructive, anything Pillow surfaced via
+    ``im.info`` (DPI, color profiles, existing text chunks) is carried
+    forward, and existing iTXt entries on the source image are merged
+    in alongside the new ``wireviz:yaml`` chunk.
+    """
+    with PILImage.open(io.BytesIO(png_bytes)) as im:
+        im.load()
+        chunks = PngInfo()
+        # Preserve any existing iTXt chunks (e.g. dpi metadata or
+        # downstream-tool annotations) — Pillow surfaces them in im.text.
+        existing_text = getattr(im, "text", {}) or {}
+        for key, value in existing_text.items():
+            if key == PNG_YAML_CHUNK_KEY:
+                continue  # we're about to write a fresh one
+            chunks.add_itxt(key, value, zip=True)
+        chunks.add_itxt(PNG_YAML_CHUNK_KEY, yaml_source, zip=True)
+        out = io.BytesIO()
+        # ``**im.info`` carries forward DPI, color profile, gamma, etc.
+        # Filter the keys Pillow's PNG writer accepts to avoid TypeErrors
+        # from unrelated info entries.
+        png_save_keys = {"dpi", "gamma", "transparency", "icc_profile"}
+        save_kwargs = {k: v for k, v in im.info.items() if k in png_save_keys}
+        im.save(out, format="PNG", pnginfo=chunks, **save_kwargs)
+        return out.getvalue()
+
+
+def read_yaml_from_png(png_path: Union[str, Path]) -> Optional[str]:
+    """Return the YAML source embedded in ``png_path`` by an earlier
+    WireViz render, or ``None`` if no ``wireviz:yaml`` chunk is present.
+    """
+    with PILImage.open(png_path) as im:
+        im.load()
+        return im.text.get(PNG_YAML_CHUNK_KEY) if hasattr(im, "text") else None
 
 
 def check_old(node: str, old_attr: dict, args: dict) -> None:
@@ -685,6 +733,7 @@ class Harness:
         output_dir: Optional[Union[str, Path]] = None,
         output_name: Optional[str] = None,
         template_dir: Optional[Union[str, Path]] = None,
+        yaml_source: Optional[str] = None,
     ) -> None:
         """Render the harness in the requested formats.
 
@@ -693,6 +742,12 @@ class Harness:
         ``filename`` is None, exactly one format must be requested and
         its bytes/text are written to stdout — supports piping the CLI
         into other tools.
+
+        If ``yaml_source`` is provided and PNG output is requested, the
+        YAML source string is embedded in the PNG as an iTXt chunk under
+        the key ``wireviz:yaml`` for round-trip editing. Recovery via
+        ``Harness.read_yaml_from_png()`` or ``wireviz.parse()`` with a
+        .png input file.
 
         Args:
             filename: Output base path (without extension). ``None``
@@ -713,6 +768,9 @@ class Harness:
                 resolving a ``metadata.template.name`` reference. Falls
                 through to the YAML source directory, then ``output_dir``,
                 then the built-in templates shipped with WireViz.
+            yaml_source: Source YAML string. When non-None and PNG is in
+                ``fmt``, embedded as an iTXt chunk in the PNG output for
+                round-trip editing.
         """
         if isinstance(fmt, str):
             fmt = (fmt,)
@@ -721,6 +779,7 @@ class Harness:
             output_dir=output_dir,
             output_name=output_name,
             template_dir=template_dir,
+            yaml_source=yaml_source,
         )
 
         if "csv" in fmt:
@@ -757,6 +816,7 @@ class Harness:
         output_dir: Optional[Union[str, Path]] = None,
         output_name: Optional[str] = None,
         template_dir: Optional[Union[str, Path]] = None,
+        yaml_source: Optional[str] = None,
     ) -> Dict[str, Union[str, bytes]]:
         """Produce in-memory representations of each requested format.
 
@@ -810,6 +870,8 @@ class Harness:
         png_bytes: Optional[bytes] = None
         if "png" in fmt:
             png_bytes = graph.pipe(format="png")
+            if yaml_source is not None:
+                png_bytes = _embed_yaml_in_png(png_bytes, yaml_source)
             outputs["png"] = png_bytes
 
         if "gv" in fmt:

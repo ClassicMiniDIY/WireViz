@@ -1,0 +1,16 @@
+# Single hex-RGB wire color — the upstream PR #495 regression case.
+# Before the fix, ``len(colorstr) > 2`` mis-detected a 7-character
+# hex string as a multi-colored wire and padded it like one.
+connectors:
+  X1:
+    pinlabels: [A]
+
+cables:
+  W1:
+    gauge: 0.25 mm2
+    length: 0.1
+    colors: ["#ff0000"]
+
+connections:
+  - - X1: [1]
+    - W1: [1]

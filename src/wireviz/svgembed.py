@@ -13,7 +13,7 @@ def data_URI_base64(file: Union[str, Path], media: str = "image") -> str:
     """Return Base64-encoded data URI of input file."""
     file = Path(file)
     b64 = base64.b64encode(file.read_bytes()).decode("utf-8")
-    uri = f"data:{media}/{get_mime_subtype(file)};base64, {b64}"
+    uri = f"data:{media}/{get_mime_subtype(file)};base64,{b64}"
     # print(f"data_URI_base64('{file}', '{media}') -> {len(uri)}-character URI")
     if len(uri) > 65535:
         print(
@@ -36,7 +36,7 @@ def embed_svg_images(svg_in: str, base_path: Union[str, Path] = Path.cwd()) -> s
             images_b64[imgurl] = base64.b64encode(image).decode("utf-8")
         return image_tag(
             match["PRE"] or "",
-            f"data:image/{get_mime_subtype(imgurl)};base64, {images_b64[imgurl]}",
+            f"data:image/{get_mime_subtype(imgurl)};base64,{images_b64[imgurl]}",
             match["POST"] or "",
         )
 

@@ -1,0 +1,11 @@
+# Loop-only connector that is NOT referenced in any connection set.
+# Upstream PR #496 added auto-instantiation so this still renders;
+# without that fix the connector is silently dropped as an unused
+# template.
+connectors:
+  X1:
+    pincount: 4
+    pinlabels: [A, B, C, D]
+    loops:
+      - [1, 4]
+      - [2, 3]

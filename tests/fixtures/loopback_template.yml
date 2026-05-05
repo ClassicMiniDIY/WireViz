@@ -1,0 +1,21 @@
+# Connector template (``DSub:``) carrying loops, used via the
+# Template.Designator syntax (``DSub.X1`` / ``DSub.X2``). The review
+# fix on PR #1 ensures we don't ALSO auto-instantiate ``DSub`` itself
+# as a phantom floating connector.
+connectors:
+  DSub:
+    type: D-Sub
+    pinlabels: [GND, RX, TX, DTR]
+    loops: [[1, 4]]
+
+cables:
+  W1:
+    gauge: 0.25 mm2
+    length: 0.5
+    color_code: DIN
+    wirecount: 2
+
+connections:
+  - - DSub.X1: [2, 3]
+    - W1: [1, 2]
+    - DSub.X2: [3, 2]

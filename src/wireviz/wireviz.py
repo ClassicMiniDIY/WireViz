@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import copy
 import platform
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
 
@@ -112,6 +113,10 @@ def parse(
         raise TypeError(
             f"Expected a dict as top-level YAML input, but got: {type(yaml_data)}"
         )
+    # When inp was a Path, derive source_path automatically so callers
+    # don't have to pass it twice. Matches the docstring contract.
+    if source_path is None and yaml_file is not None:
+        source_path = yaml_file
     write_to_stdout = (
         output_formats and (str(output_dir) == "-" or str(output_name) == "-")
     )
@@ -506,8 +511,10 @@ def _get_yaml_data_and_path(
         yaml_data = yaml.safe_load(yaml_str)
     else:
         # received a Dict — serialize back to YAML so the caller has a
-        # text form for round-trip embedding into PNG output.
-        yaml_data = inp
+        # text form for round-trip embedding into PNG output, and
+        # deep-copy so the parsing pipeline's in-place expansion of
+        # the connections section doesn't leak back to the caller.
+        yaml_data = copy.deepcopy(inp)
         yaml_path = None
         yaml_str = yaml.safe_dump(inp, sort_keys=False, allow_unicode=True)
     return yaml_data, yaml_path, yaml_str

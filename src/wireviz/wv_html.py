@@ -24,19 +24,24 @@ def generate_html_output(
     output_name: Union[str, None] = None,
     png_b64: Union[str, None] = None,
     source_path: Union[str, Path, None] = None,
+    template_dir: Union[str, Path, None] = None,
 ) -> str:
     # load HTML template
     templatename = metadata.get("template", {}).get("name")
     builtin_template_dir = Path(__file__).parent / "templates"
     if templatename:
-        # custom template lookup order: directory of the input YAML
-        # (source_path), then the output directory, then the built-in
-        # templates shipped with WireViz.
+        # custom template lookup order, highest priority first:
+        #   1. explicit template_dir (CLI -t / parse template_dir)
+        #   2. YAML source directory (source_path.parent)
+        #   3. output directory
+        #   4. built-in templates shipped with WireViz
         search_paths = [builtin_template_dir]
         if output_dir is not None:
             search_paths.insert(0, Path(output_dir))
         if source_path is not None:
             search_paths.insert(0, Path(source_path).parent)
+        if template_dir is not None:
+            search_paths.insert(0, Path(template_dir))
         templatefile = smart_file_resolve(
             f"{templatename}.html",
             search_paths,

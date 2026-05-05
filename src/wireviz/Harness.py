@@ -678,6 +678,7 @@ class Harness:
         cleanup: bool = True,
         output_dir: Optional[Union[str, Path]] = None,
         output_name: Optional[str] = None,
+        template_dir: Optional[Union[str, Path]] = None,
     ) -> None:
         """Render the harness in the requested formats.
 
@@ -686,6 +687,26 @@ class Harness:
         ``filename`` is None, exactly one format must be requested and
         its bytes/text are written to stdout — supports piping the CLI
         into other tools.
+
+        Args:
+            filename: Output base path (without extension). ``None``
+                routes a single format to stdout instead of writing files.
+            fmt: One or more formats from ``html``, ``png``, ``svg``,
+                ``gv``, ``tsv``, ``csv``, ``pdf``. A bare string is
+                normalized to a one-tuple.
+            view: Reserved (unused — kept for API compatibility with the
+                pre-refactor signature).
+            cleanup: Reserved (unused — kept for API compatibility).
+            output_dir: Output directory. Used only to populate the
+                ``<!-- %filename% -->`` HTML template placeholder and to
+                resolve a custom ``metadata.template.name`` reference.
+            output_name: Output base name (without extension). Used only
+                to populate the ``<!-- %filename_stem% -->`` HTML
+                template placeholder.
+            template_dir: Explicit directory to search first when
+                resolving a ``metadata.template.name`` reference. Falls
+                through to the YAML source directory, then ``output_dir``,
+                then the built-in templates shipped with WireViz.
         """
         if isinstance(fmt, str):
             fmt = (fmt,)
@@ -693,6 +714,7 @@ class Harness:
             fmt,
             output_dir=output_dir,
             output_name=output_name,
+            template_dir=template_dir,
         )
 
         if "csv" in fmt:
@@ -728,12 +750,33 @@ class Harness:
         fmt: Union[str, Tuple[str, ...], List[str]],
         output_dir: Optional[Union[str, Path]] = None,
         output_name: Optional[str] = None,
+        template_dir: Optional[Union[str, Path]] = None,
     ) -> Dict[str, Union[str, bytes]]:
         """Produce in-memory representations of each requested format.
 
         Pipes graphviz once per binary output rather than via ``render()``
         + temporary files so the caller can write files OR pipe to stdout
         without the SVG-file roundtrip the previous implementation used.
+
+        Args:
+            fmt: One or more formats from ``html``, ``png``, ``svg``,
+                ``gv``, ``tsv``. ``csv`` and ``pdf`` are recognized at
+                the dispatch layer but not produced here. A bare string
+                is normalized to a one-tuple.
+            output_dir: Forwarded to ``generate_html_output`` for
+                ``<!-- %filename% -->`` and ``<!-- %diagram_png_b64% -->``
+                template-placeholder resolution, and as the third-priority
+                directory in the custom-template search path.
+            output_name: Forwarded to ``generate_html_output`` for
+                ``<!-- %filename_stem% -->`` resolution.
+            template_dir: Forwarded to ``generate_html_output`` as the
+                first-priority directory in the custom-template search
+                path.
+
+        Returns:
+            ``{format: bytes|str}``. Binary formats (``png``) yield
+            bytes; text formats (``svg``, ``html``, ``gv``, ``tsv``)
+            yield str.
         """
         if isinstance(fmt, str):
             fmt = (fmt,)
@@ -788,6 +831,7 @@ class Harness:
                     output_name=output_name,
                     png_b64=png_b64,
                     source_path=self.source_path,
+                    template_dir=template_dir,
                 )
 
         return outputs

@@ -11,6 +11,7 @@ if __name__ == "__main__":
 
 import wireviz.wireviz as wv
 from wireviz import APP_NAME, __version__
+from wireviz.Harness import read_yaml_from_png
 from wireviz.wv_helper import file_read_text
 
 format_codes = {
@@ -18,7 +19,7 @@ format_codes = {
     "g": "gv",
     "h": "html",
     "p": "png",
-    # "P": "pdf",
+    "P": "pdf",
     "s": "svg",
     "t": "tsv",
 }
@@ -65,18 +66,37 @@ epilog += ", ".join([f"{key} ({value.upper()})" for key, value in format_codes.i
     help="File name (without extension) to use for output files, if different from input file name.",
 )
 @click.option(
+    "-t",
+    "--template-dir",
+    default=None,
+    type=Path,
+    help="Directory searched first when resolving a metadata.template.name reference.",
+)
+@click.option(
+    "--no-embed-yaml",
+    "embed_yaml",
+    flag_value=False,
+    default=True,
+    help="Do not embed the source YAML in PNG output as an iTXt chunk.",
+)
+@click.option(
     "-V",
     "--version",
     is_flag=True,
     default=False,
     help=f"Output {APP_NAME} version and exit.",
 )
-def wireviz(file, format, prepend, output_dir, output_name, version):
+def wireviz(
+    file, format, prepend, output_dir, output_name, template_dir, embed_yaml, version
+):
     """
     Parses the provided FILE and generates the specified outputs.
+
+    Pass FILE as ``-`` to read YAML from stdin, and pass ``-`` to either
+    --output-dir or --output-name to write a single rendered format to
+    stdout (e.g. ``cat harness.yml | wireviz -f s -O - -``).
     """
-    print()
-    print(f"{APP_NAME} {__version__}")
+    sys.stderr.write(f"\n{APP_NAME} {__version__}\n")
     if version:
         return  # print version number only and exit
 
@@ -88,19 +108,27 @@ def wireviz(file, format, prepend, output_dir, output_name, version):
     else:
         filepaths = list(file)
 
-    # determine output formats
+    # determine output formats (preserve user-given order, dedup)
     output_formats = []
     for code in format:
         if code in format_codes:
-            output_formats.append(format_codes[code])
+            fmt = format_codes[code]
+            if fmt not in output_formats:
+                output_formats.append(fmt)
         else:
             raise Exception(f"Unknown output format: {code}")
-    output_formats = tuple(sorted(set(output_formats)))
+    output_formats = tuple(output_formats)
     output_formats_str = (
         f'[{"|".join(output_formats)}]'
         if len(output_formats) > 1
         else output_formats[0]
     )
+
+    write_to_stdout = str(output_dir) == "-" or str(output_name) == "-"
+    if write_to_stdout and len(output_formats) != 1:
+        raise click.UsageError(
+            "Exactly one output format (-f) must be specified when writing to stdout."
+        )
 
     # check prepend file
     if len(prepend) > 0:
@@ -109,34 +137,62 @@ def wireviz(file, format, prepend, output_dir, output_name, version):
             prepend_file = Path(prepend_file)
             if not prepend_file.exists():
                 raise Exception(f"File does not exist:\n{prepend_file}")
-            print("Prepend file:", prepend_file)
+            sys.stderr.write(f"Prepend file: {prepend_file}\n")
 
             prepend_input += file_read_text(prepend_file) + "\n"
     else:
         prepend_input = ""
 
-    # run WireVIz on each input file
+    # run WireViz on each input file (or once on stdin)
+    if not filepaths:
+        filepaths = ["-"]
+
     for file in filepaths:
-        file = Path(file)
-        if not file.exists():
-            raise Exception(f"File does not exist:\n{file}")
+        if str(file) == "-":
+            yaml_input = prepend_input + sys.stdin.read()
+            image_paths = set()
+            sys.stderr.write("Input:        <stdin>\n")
+            _output_dir = output_dir if output_dir else "-"
+            _output_name = output_name if output_name else "stdin"
+        else:
+            file = Path(file)
+            if not file.exists():
+                raise Exception(f"File does not exist:\n{file}")
 
-        # file_out = file.with_suffix("") if not output_file else output_file
-        _output_dir = file.parent if not output_dir else output_dir
-        _output_name = file.stem if not output_name else output_name
+            if file.suffix.lower() == ".png":
+                # PNG input: try to recover the YAML embedded by an
+                # earlier WireViz render. Catch PIL's UnidentifiedImageError
+                # (and anything else PIL throws for corrupt files) so the
+                # user sees a clean message instead of a stack trace.
+                try:
+                    embedded = read_yaml_from_png(file)
+                except Exception as exc:
+                    raise click.UsageError(
+                        f"Could not read PNG {file}: {exc}"
+                    ) from exc
+                if embedded is None:
+                    raise click.UsageError(
+                        f"{file} has no embedded WireViz YAML (no "
+                        f"'wireviz:yaml' iTXt chunk found)."
+                    )
+                yaml_input = prepend_input + embedded
+                sys.stderr.write(f"Input file:   {file} (extracted YAML)\n")
+            else:
+                yaml_input = prepend_input + file_read_text(file)
+                sys.stderr.write(f"Input file:   {file}\n")
+            image_paths = {file.parent}
+            _output_dir = output_dir if output_dir else file.parent
+            _output_name = output_name if output_name else file.stem
 
-        print("Input file:  ", file)
-        print(
-            "Output file: ", f"{Path(_output_dir / _output_name)}.{output_formats_str}"
-        )
-
-        yaml_input = file_read_text(file)
-        file_dir = file.parent
-
-        yaml_input = prepend_input + yaml_input
-        image_paths = {file_dir}
         for p in prepend:
             image_paths.add(Path(p).parent)
+
+        if write_to_stdout:
+            sys.stderr.write(f"Output:       <stdout>.{output_formats_str}\n")
+        else:
+            sys.stderr.write(
+                f"Output file:  {Path(_output_dir) / _output_name}.{output_formats_str}\n"
+            )
 
         wv.parse(
             yaml_input,
@@ -145,9 +201,11 @@ def wireviz(file, format, prepend, output_dir, output_name, version):
             output_name=_output_name,
             image_paths=list(image_paths),
             source_path=file,
+            template_dir=template_dir,
+            embed_yaml=embed_yaml,
         )
 
-    print()
+    sys.stderr.write("\n")
 
 
 if __name__ == "__main__":

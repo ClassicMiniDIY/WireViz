@@ -96,7 +96,12 @@ def wireviz(
     --output-dir or --output-name to write a single rendered format to
     stdout (e.g. ``cat harness.yml | wireviz -f s -O - -``).
     """
-    sys.stderr.write(f"\n{APP_NAME} {__version__}\n")
+    # Use ``click.echo(..., err=True)`` instead of ``sys.stderr.write``
+    # for status/log lines so they reach Click's captured-stderr stream
+    # uniformly across Click 8.1 (only captures click.echo) and 8.2+
+    # (captures sys.stderr.write too). The end-state is the same — log
+    # lines on stderr, render output on stdout.
+    click.echo(f"\n{APP_NAME} {__version__}", err=True)
     if version:
         return  # print version number only and exit
 
@@ -139,7 +144,7 @@ def wireviz(
                 raise click.UsageError(
                     f"Prepend file does not exist: {prepend_file}"
                 )
-            sys.stderr.write(f"Prepend file: {prepend_file}\n")
+            click.echo(f"Prepend file: {prepend_file}", err=True)
 
             prepend_input += file_read_text(prepend_file) + "\n"
     else:
@@ -157,7 +162,7 @@ def wireviz(
             # the current working directory (matching how a typical
             # piped invocation would be run from a project root).
             image_paths = {Path.cwd()}
-            sys.stderr.write("Input:        <stdin>\n")
+            click.echo("Input:        <stdin>", err=True)
             _output_dir = output_dir if output_dir else "-"
             _output_name = output_name if output_name else "stdin"
         else:
@@ -182,10 +187,10 @@ def wireviz(
                         f"'wireviz:yaml' iTXt chunk found)."
                     )
                 yaml_input = prepend_input + embedded
-                sys.stderr.write(f"Input file:   {file} (extracted YAML)\n")
+                click.echo(f"Input file:   {file} (extracted YAML)", err=True)
             else:
                 yaml_input = prepend_input + file_read_text(file)
-                sys.stderr.write(f"Input file:   {file}\n")
+                click.echo(f"Input file:   {file}", err=True)
             image_paths = {file.parent}
             _output_dir = output_dir if output_dir else file.parent
             _output_name = output_name if output_name else file.stem
@@ -194,10 +199,13 @@ def wireviz(
             image_paths.add(Path(p).parent)
 
         if write_to_stdout:
-            sys.stderr.write(f"Output:       <stdout>.{output_formats_str}\n")
+            click.echo(
+                f"Output:       <stdout>.{output_formats_str}", err=True
+            )
         else:
-            sys.stderr.write(
-                f"Output file:  {Path(_output_dir) / _output_name}.{output_formats_str}\n"
+            click.echo(
+                f"Output file:  {Path(_output_dir) / _output_name}.{output_formats_str}",
+                err=True,
             )
 
         wv.parse(
@@ -211,7 +219,7 @@ def wireviz(
             embed_yaml=embed_yaml,
         )
 
-    sys.stderr.write("\n")
+    click.echo("", err=True)
 
 
 if __name__ == "__main__":

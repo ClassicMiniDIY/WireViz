@@ -17,13 +17,17 @@ from wireviz.wv_helper import (
 
 def _latest_revision(metadata: Metadata) -> str:
     """Return the key of the most recently added entry in
-    ``metadata.revisions``. Relies on Python dict insertion-order
-    preservation; YAML parsers preserve the document order. Returns
-    "" if no revisions are declared."""
+    ``metadata.revisions`` when revisions is a dict or list, or the
+    value itself when it is a scalar (string/int/float).
+
+    Dict/list relies on Python's insertion-order preservation; YAML
+    parsers preserve document order. Returns "" for missing, empty,
+    or None values.
+    """
     revisions = metadata.get("revisions") if metadata else None
-    if not revisions:
-        return ""
-    return str(list(revisions)[-1])
+    if isinstance(revisions, (dict, list)):
+        return str(list(revisions)[-1]) if revisions else ""
+    return str(revisions) if revisions is not None else ""
 
 
 def generate_html_output(

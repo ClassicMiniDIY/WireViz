@@ -59,6 +59,12 @@ class Options:
     color_mode: ColorMode = "SHORT"
     mini_bom_mode: bool = True
     template_separator: str = "."
+    # Graphviz dpi attribute (https://graphviz.org/docs/attrs/dpi/) — controls
+    # the resolution of raster (PNG) output and the size unit of vector (SVG)
+    # output. Default 96.0 matches Graphviz's default for non-PostScript
+    # output. Set to ``null`` in YAML (``None`` in Python) to omit the dpi
+    # attribute entirely and let Graphviz pick its renderer-specific default.
+    output_dpi: Optional[float] = 96.0
 
     def __post_init__(self):
         if not self.bgcolor_node:

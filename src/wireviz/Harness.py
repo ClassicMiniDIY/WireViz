@@ -175,6 +175,7 @@ class Harness:
             bgcolor=wv_colors.translate_color(self.options.bgcolor, "HEX"),
             nodesep="0.33",
             fontname=self.options.fontname,
+            dpi=str(self.options.output_dpi),
         )  # TODO: Add graph attribute: charset="utf-8",
         dot.attr(
             "node",

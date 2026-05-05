@@ -1,5 +1,58 @@
 # Change Log
 
+## [0.5.0] (2026-05-05)
+
+First release of the [ClassicMiniDIY/WireViz](https://github.com/ClassicMiniDIY/WireViz) fork. Pulls in seven open upstream PRs that had been sitting unmerged for years, lays an automated test suite, and fixes a handful of bugs surfaced along the way.
+
+### New features
+
+- **stdin/stdout streaming** ([upstream #321](https://github.com/wireviz/WireViz/pull/321)). Pass `-` as the input filename to read YAML from stdin, and pass `-` to either `--output-dir` or `--output-name` to write a single rendered format to stdout. Enables `cat harness.yml | wireviz -f s -O - - > harness.svg`-style pipelines.
+- **YAML embedded in PNG** ([upstream #234](https://github.com/wireviz/WireViz/pull/234)). PNG outputs now carry the source YAML in a `wireviz:yaml` iTXt chunk by default. The CLI auto-detects `.png` inputs and pulls the YAML back out — a single PNG is enough to re-render or edit a harness. Opt out with `--no-embed-yaml`.
+- **PDF output** ([upstream #367](https://github.com/wireviz/WireViz/pull/367)). The previously-stubbed `pdf` format is now wired to graphviz's PDF renderer. Use `-f P`.
+- **Custom template directory** ([upstream #444](https://github.com/wireviz/WireViz/pull/444)). New `-t` / `--template-dir` flag and `parse(template_dir=...)` parameter point at an explicit directory of HTML templates. Search order: `template_dir` → YAML source dir → output dir → built-in templates.
+- **`output_dpi` option** ([upstream #379](https://github.com/wireviz/WireViz/pull/379)). YAML `options.output_dpi` controls the graphviz `dpi` graph attribute. Default 96.0 (matches graphviz's own default for non-PostScript renderers); `null` omits the attribute entirely.
+- **Per-connector / per-cable tweak with placeholder** ([upstream #357](https://github.com/wireviz/WireViz/pull/357)). Connectors and cables can now carry their own `tweak:` block with the same `override` / `append` shape as the global one, and a placeholder substring rewritten to the node's actual designator at instantiation. Lets users author one tweak template and apply it to many components.
+- **`<!-- %revision% -->` HTML template placeholder** ([upstream #492](https://github.com/wireviz/WireViz/pull/492)). Resolves to the most recently declared entry in `metadata.revisions`.
+
+### Bug fixes (upstream PRs incorporated)
+
+- Loopback rendering: loop-only connectors silently dropped, all loops forced onto a single side, loop edge ports referenced pin numbers instead of pin positions ([upstream #496](https://github.com/wireviz/WireViz/pull/496)).
+- Hex RGB color codes mis-detected as multi-color stripes, padding single-color wires to 3× thickness ([upstream #495](https://github.com/wireviz/WireViz/pull/495)).
+- Custom HTML templates not resolvable against the YAML source directory ([upstream #473](https://github.com/wireviz/WireViz/pull/473)).
+- SVG images embedded as base64 data URIs used the wrong MIME type (`image/svg` instead of `image/svg+xml`) ([upstream #443](https://github.com/wireviz/WireViz/pull/443)).
+
+### Bug fixes (additional, surfaced by code review or the new test suite)
+
+- Loop-only connector templates used via `Template.Designator` syntax (`DSub.X1`) no longer get an additional phantom floating instance.
+- `parse()` no longer mutates dict inputs in place during connection-set expansion (load-bearing for programmatic callers).
+- `re.sub(..., 1)` migrated to `re.sub(..., count=1)` for Python 3.13+ compatibility.
+- CLI errors (missing input file, missing prepend file, unknown `-f` code, multi-format-to-stdout, corrupt PNG input) now raise `click.UsageError` instead of generic `Exception`, so users see clean error messages instead of Python tracebacks.
+- Data URIs no longer have a leading space after `;base64,` (RFC 2397 compliance).
+- `_latest_revision` handles scalar `revisions:` values (string/int/float) without truncation; previously `revisions: v1.0` returned `'0'`.
+- Per-connector `tweak.override` with a `null` value no longer crashes the placeholder-substitution lambda.
+- `_extend_tweak` keeps empty override dicts rather than collapsing to `None`, which previously caused `Harness.create_graph()` to choke.
+- `output_dpi: null` correctly omits the dpi graph attribute (instead of emitting the literal string `"None"`).
+- The `wireviz:yaml` chunk embedding preserves existing PNG metadata (DPI, color profile, prior text chunks) instead of stripping them on re-encode.
+- Tweak override conflict errors now include both the existing and new value.
+- `parse()` `source_path` auto-fills from a `Path` input as the docstring promised.
+
+### Internal
+
+- New `wireviz.parse()` signature additions: `source_path`, `template_dir`, `embed_yaml`. Existing callers are backward-compatible.
+- New `Harness._render(fmt, ...)` method returning an in-memory `{format: bytes|str}` dict, used by both `Harness.output()` (file mode) and the stdin/stdout dispatch path.
+- New module-level helpers: `Harness.PNG_YAML_CHUNK_KEY`, `Harness.read_yaml_from_png()`.
+- New `Harness.output()` and `Harness._render()` accept `fmt` as `Union[str, Tuple[str, ...], List[str]]`; bare strings are normalized to one-tuples.
+
+### Testing
+
+- New automated pytest suite (134 tests across nine files): smoke, parse, CLI, harness, dataclasses, colors, BOM, regressions, round-trip. Runs in ~5 seconds.
+- New `Tests` GitHub Actions workflow runs pytest across Python 3.7–3.12 in parallel with the existing `Create Examples` workflow.
+
+### Notes for upstream divergence
+
+Adapted to current upstream `master` even when source PRs targeted `dev` (which carries an unreleased "big refactor" we deliberately did not pull). All commits cite their upstream origin in the body, so a future merge back upstream is feasible.
+
+
 ## [0.4.1] (2024-07-13)
 
 ### Improvements to help reported issues

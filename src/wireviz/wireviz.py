@@ -112,6 +112,10 @@ def parse(
         raise TypeError(
             f"Expected a dict as top-level YAML input, but got: {type(yaml_data)}"
         )
+    # When inp was a Path, derive source_path automatically so callers
+    # don't have to pass it twice. Matches the docstring contract.
+    if source_path is None and yaml_file is not None:
+        source_path = yaml_file
     write_to_stdout = (
         output_formats and (str(output_dir) == "-" or str(output_name) == "-")
     )

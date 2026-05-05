@@ -116,7 +116,7 @@ def wireviz(
             if fmt not in output_formats:
                 output_formats.append(fmt)
         else:
-            raise Exception(f"Unknown output format: {code}")
+            raise click.UsageError(f"Unknown output format: {code}")
     output_formats = tuple(output_formats)
     output_formats_str = (
         f'[{"|".join(output_formats)}]'
@@ -150,7 +150,11 @@ def wireviz(
     for file in filepaths:
         if str(file) == "-":
             yaml_input = prepend_input + sys.stdin.read()
-            image_paths = set()
+            # No source-file directory available, so any relative
+            # `image: src:` paths in the stdin YAML are resolved against
+            # the current working directory (matching how a typical
+            # piped invocation would be run from a project root).
+            image_paths = {Path.cwd()}
             sys.stderr.write("Input:        <stdin>\n")
             _output_dir = output_dir if output_dir else "-"
             _output_name = output_name if output_name else "stdin"

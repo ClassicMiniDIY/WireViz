@@ -172,7 +172,8 @@ class Harness:
                 k, v = rph(k), rph(v)
                 if k in s_dict and v != s_dict[k]:
                     raise ValueError(
-                        f"{node.name}.tweak.override.{ident}.{k} conflicts with another"
+                        f"{node.name}.tweak.override.{ident}.{k}: new value "
+                        f"{v!r} conflicts with existing {s_dict[k]!r}"
                     )
                 s_dict[k] = v
             # Keep the empty dict rather than collapsing to None — the
@@ -935,7 +936,7 @@ class Harness:
                 # rendered in this same call; otherwise let the template
                 # fall back to reading {output_dir}/{output_name}.png.
                 png_b64 = (
-                    f"data:image/png;base64, {base64.b64encode(png_bytes).decode('utf-8')}"
+                    f"data:image/png;base64,{base64.b64encode(png_bytes).decode('utf-8')}"
                     if png_bytes is not None
                     else None
                 )

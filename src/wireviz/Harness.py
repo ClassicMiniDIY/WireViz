@@ -108,7 +108,12 @@ class Harness:
         # placeholder; only None falls back.
         if ph is None:
             ph = self.tweak.placeholder
-        rph = (lambda s: s.replace(ph, node.name)) if ph else (lambda s: s)
+        # The replacement target may be None when an override deletes a
+        # key (``key: null`` in YAML), so guard the str.replace call.
+        if ph:
+            rph = lambda s: s.replace(ph, node.name) if isinstance(s, str) else s
+        else:
+            rph = lambda s: s
 
         n_override = node.tweak.override or {}
         s_override = self.tweak.override or {}
@@ -122,7 +127,10 @@ class Harness:
                         f"{node.name}.tweak.override.{ident}.{k} conflicts with another"
                     )
                 s_dict[k] = v
-            s_override[ident] = s_dict or None
+            # Keep the empty dict rather than collapsing to None — the
+            # graph-emission code (Harness.create_graph) expects values
+            # in self.tweak.override to be dicts, not None.
+            s_override[ident] = s_dict
         self.tweak.override = s_override or None
         self.tweak.append = (
             make_list(self.tweak.append)

@@ -510,8 +510,12 @@ def _get_yaml_data_and_path(
         yaml_data = yaml.safe_load(yaml_str)
     else:
         # received a Dict — serialize back to YAML so the caller has a
-        # text form for round-trip embedding into PNG output.
-        yaml_data = inp
+        # text form for round-trip embedding into PNG output, and
+        # deep-copy so the parsing pipeline's in-place expansion of
+        # the connections section doesn't leak back to the caller.
+        import copy
+
+        yaml_data = copy.deepcopy(inp)
         yaml_path = None
         yaml_str = yaml.safe_dump(inp, sort_keys=False, allow_unicode=True)
     return yaml_data, yaml_path, yaml_str

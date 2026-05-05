@@ -1,0 +1,18 @@
+metadata:
+  template:
+    name: branded
+
+connectors:
+  X1:
+    pinlabels: [A, B]
+
+cables:
+  W1:
+    gauge: 0.25 mm2
+    length: 0.1
+    color_code: DIN
+    wirecount: 2
+
+connections:
+  - - X1: [1, 2]
+    - W1: [1, 2]

@@ -1,0 +1,26 @@
+metadata:
+  revisions:
+    A:
+      date: 2024-01-01
+      name: Initial draft
+    B:
+      date: 2024-06-15
+      name: Pin labels added
+    C:
+      date: 2026-04-10
+      name: Latest tweak
+
+connectors:
+  X1:
+    pinlabels: [A, B]
+
+cables:
+  W1:
+    gauge: 0.25 mm2
+    length: 0.1
+    color_code: DIN
+    wirecount: 2
+
+connections:
+  - - X1: [1, 2]
+    - W1: [1, 2]

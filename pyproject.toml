@@ -1,2 +1,15 @@
 [tool.isort]
 profile = "black"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# Treat unexpected warnings as errors so dataclass / deprecation drift is caught
+filterwarnings = [
+    "error",
+    # graphviz emits a SyntaxWarning on Python 3.12+ for an internal regex —
+    # not our problem and not worth blocking the suite on
+    "ignore::SyntaxWarning",
+]

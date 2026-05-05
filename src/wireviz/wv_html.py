@@ -73,7 +73,7 @@ def generate_html_output(
             "^<[?]xml [^?>]*[?]>[^<]*<!DOCTYPE [^>]*>",
             "<!-- XML and DOCTYPE declarations from SVG file removed -->",
             svg_input or "",
-            1,
+            count=1,
         )
 
     # generate BOM table

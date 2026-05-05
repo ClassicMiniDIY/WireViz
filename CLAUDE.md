@@ -10,17 +10,32 @@ This repo is the **upstream Python CLI**. A separate GUI front-end is being buil
 
 ## Commands
 
-WireViz has **no automated test suite**. The de-facto regression check is rebuilding the examples and diffing the output.
+WireViz has both an **automated pytest suite** (`tests/`) and a separate **example-rebuild regression check** (`build_examples.py`). They serve complementary purposes — pytest validates the API and CLI surface; the example sweep validates rendered visual output across the gallery.
 
 ```bash
 # Install for development (from repo root)
 pip install -e .
+pip install pytest
+
+# Run the unit / integration test suite (~134 tests, ~5s)
+pytest
+
+# Run a single test file or test
+pytest tests/test_regressions.py
+pytest tests/test_cli.py::test_cli_template_dir
 
 # Run the CLI on a YAML file (produces .gv .svg .png .html .bom.tsv next to input)
 wireviz path/to/file.yml
 
-# Limit output formats: g=gv h=html p=png s=svg t=tsv
+# Limit output formats: g=gv h=html p=png s=svg t=tsv P=pdf
 wireviz -f hps path/to/file.yml
+
+# Stdin → stdout: pipe YAML in, get one rendered format out
+cat harness.yml | wireviz -f s -O - -    > harness.svg
+cat harness.yml | wireviz -f p -O - -    > harness.png
+
+# .png input: extract the embedded YAML and re-render
+wireviz harness.png
 
 # Rebuild every demo, example, and tutorial (must cd into src/wireviz)
 cd src/wireviz && python build_examples.py
@@ -40,7 +55,23 @@ cd src/wireviz && python build_examples.py compare -g examples tutorial demos
 
 GraphViz must be installed as a system dep (`dot -V`). Code is formatted with `black` + `isort` (`isort` profile is `black`, configured in `pyproject.toml`).
 
-CI (`.github/workflows/`) runs only `build_examples.py` across Python 3.7–3.12 — there is no `pytest`. If you add real tests, also wire them into CI.
+CI (`.github/workflows/`) runs both `pytest` (the `Tests` workflow) and `build_examples.py` (the `Create Examples` workflow) across Python 3.7–3.12. Both must pass for a PR to be considered green.
+
+## Test suite layout (`tests/`)
+
+- **`tests/test_smoke.py`** — every output format renders without error, has the right magic bytes, and produces the expected basic structure.
+- **`tests/test_parse.py`** — the `wireviz.parse()` library API: input shapes (Path / str / dict), output shapes, return_types, source_path auto-fill, embed_yaml flag.
+- **`tests/test_cli.py`** — every CLI flag via Click's `CliRunner`. Covers stdin/stdout, `.png` input round-trip, `--no-embed-yaml`, `--template-dir`, `--prepend`, error paths.
+- **`tests/test_harness.py`** — `Harness` public methods, the `_render` dict shape contract, file vs stdout dispatch.
+- **`tests/test_dataclasses.py`** — `Connector` / `Cable` / `Tweak` / `Options` / `Image` coercion and validation logic.
+- **`tests/test_colors.py`** — color schemes (DIN/IEC/T568/TEL), hex parsing, `get_color_hex` padding behavior.
+- **`tests/test_bom.py`** — BOM aggregation: identical-component dedup, ignore_in_bom, additional_bom_items, bundle category, part-number columns.
+- **`tests/test_regressions.py`** — **one test per upstream-PR port + every gemini review fix.** This is where every bug we ported a fix for gets pinned down so it can never silently regress. If you change behavior touched by any of those PRs, expect tests here to fail and update them deliberately.
+- **`tests/test_round_trip.py`** — PNG embed/extract, stdin→stdout pipelines, dict-input no-mutation contract.
+
+`tests/conftest.py` provides shared fixtures (paths to small targeted YAMLs in `tests/fixtures/`). The fixture YAMLs are deliberately separate from the gallery YAMLs in `examples/` so tests aren't coupled to visual gallery changes.
+
+`pyproject.toml` configures pytest to treat unexpected warnings as errors (`filterwarnings = ["error", "ignore::SyntaxWarning"]`) so deprecations like the `re.sub(..., 1)` → `re.sub(..., count=1)` migration get caught early.
 
 ## Architecture
 

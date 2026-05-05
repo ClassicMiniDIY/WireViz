@@ -136,7 +136,9 @@ def wireviz(
         for prepend_file in prepend:
             prepend_file = Path(prepend_file)
             if not prepend_file.exists():
-                raise Exception(f"File does not exist:\n{prepend_file}")
+                raise click.UsageError(
+                    f"Prepend file does not exist: {prepend_file}"
+                )
             sys.stderr.write(f"Prepend file: {prepend_file}\n")
 
             prepend_input += file_read_text(prepend_file) + "\n"
@@ -161,7 +163,7 @@ def wireviz(
         else:
             file = Path(file)
             if not file.exists():
-                raise Exception(f"File does not exist:\n{file}")
+                raise click.UsageError(f"Input file does not exist: {file}")
 
             if file.suffix.lower() == ".png":
                 # PNG input: try to recover the YAML embedded by an

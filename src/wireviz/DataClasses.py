@@ -59,6 +59,12 @@ class Options:
     color_mode: ColorMode = "SHORT"
     mini_bom_mode: bool = True
     template_separator: str = "."
+    # Graphviz dpi attribute (https://graphviz.org/docs/attrs/dpi/) — controls
+    # the resolution of raster (PNG) output and the size unit of vector (SVG)
+    # output. Default 96.0 matches Graphviz's default for non-PostScript
+    # output. Set to ``null`` in YAML (``None`` in Python) to omit the dpi
+    # attribute entirely and let Graphviz pick its renderer-specific default.
+    output_dpi: Optional[float] = 96.0
 
     def __post_init__(self):
         if not self.bgcolor_node:
@@ -73,6 +79,7 @@ class Options:
 
 @dataclass
 class Tweak:
+    placeholder: Optional[PlainText] = None
     override: Optional[Dict[Designator, Dict[str, Optional[str]]]] = None
     append: Union[str, List[str], None] = None
 
@@ -164,10 +171,13 @@ class Connector:
     loops: List[List[Pin]] = field(default_factory=list)
     ignore_in_bom: bool = False
     additional_components: List[AdditionalComponent] = field(default_factory=list)
+    tweak: Optional[Tweak] = None
 
     def __post_init__(self) -> None:
         if isinstance(self.image, dict):
             self.image = Image(**self.image)
+        if isinstance(self.tweak, dict):
+            self.tweak = Tweak(**self.tweak)
 
         self.ports_left = False
         self.ports_right = False
@@ -329,10 +339,13 @@ class Cable:
     show_wirenumbers: Optional[bool] = None
     ignore_in_bom: bool = False
     additional_components: List[AdditionalComponent] = field(default_factory=list)
+    tweak: Optional[Tweak] = None
 
     def __post_init__(self) -> None:
         if isinstance(self.image, dict):
             self.image = Image(**self.image)
+        if isinstance(self.tweak, dict):
+            self.tweak = Tweak(**self.tweak)
 
         if isinstance(self.gauge, str):  # gauge and unit specified
             try:

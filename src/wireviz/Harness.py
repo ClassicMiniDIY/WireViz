@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import base64
+import io
 import re
 import sys
 from collections import Counter
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from graphviz import Graph
+from PIL import Image as PILImage
+from PIL.PngImagePlugin import PngInfo
 from wireviz import APP_NAME, APP_URL, __version__, wv_colors
 from wireviz.DataClasses import (
     Cable,
@@ -30,6 +33,7 @@ from wireviz.wv_bom import (
     component_table_entry,
     generate_bom,
     get_additional_component_table,
+    make_list,
     pn_info_string,
 )
 from wireviz.wv_colors import get_color_hex, translate_color
@@ -59,6 +63,51 @@ OLD_CONNECTOR_ATTR = {
     "autogenerate": "is replaced with new syntax in v0.4",
 }
 
+# iTXt chunk key used to embed the source YAML in rendered PNGs for
+# round-trip editing. The "wireviz:" prefix avoids collision with PNG
+# software-defined keywords or other tools' chunks.
+PNG_YAML_CHUNK_KEY = "wireviz:yaml"
+
+
+def _embed_yaml_in_png(png_bytes: bytes, yaml_source: str) -> bytes:
+    """Re-encode PNG bytes with the YAML source stored in an iTXt chunk.
+
+    Pillow's PNG write path does not natively support adding a single
+    chunk to an existing file, so this decodes and re-encodes. To keep
+    the round-trip non-destructive, anything Pillow surfaced via
+    ``im.info`` (DPI, color profiles, existing text chunks) is carried
+    forward, and existing iTXt entries on the source image are merged
+    in alongside the new ``wireviz:yaml`` chunk.
+    """
+    with PILImage.open(io.BytesIO(png_bytes)) as im:
+        im.load()
+        chunks = PngInfo()
+        # Preserve any existing iTXt chunks (e.g. dpi metadata or
+        # downstream-tool annotations) — Pillow surfaces them in im.text.
+        existing_text = getattr(im, "text", {}) or {}
+        for key, value in existing_text.items():
+            if key == PNG_YAML_CHUNK_KEY:
+                continue  # we're about to write a fresh one
+            chunks.add_itxt(key, value, zip=True)
+        chunks.add_itxt(PNG_YAML_CHUNK_KEY, yaml_source, zip=True)
+        out = io.BytesIO()
+        # ``**im.info`` carries forward DPI, color profile, gamma, etc.
+        # Filter the keys Pillow's PNG writer accepts to avoid TypeErrors
+        # from unrelated info entries.
+        png_save_keys = {"dpi", "gamma", "transparency", "icc_profile"}
+        save_kwargs = {k: v for k, v in im.info.items() if k in png_save_keys}
+        im.save(out, format="PNG", pnginfo=chunks, **save_kwargs)
+        return out.getvalue()
+
+
+def read_yaml_from_png(png_path: Union[str, Path]) -> Optional[str]:
+    """Return the YAML source embedded in ``png_path`` by an earlier
+    WireViz render, or ``None`` if no ``wireviz:yaml`` chunk is present.
+    """
+    with PILImage.open(png_path) as im:
+        im.load()
+        return im.text.get(PNG_YAML_CHUNK_KEY) if hasattr(im, "text") else None
+
 
 def check_old(node: str, old_attr: dict, args: dict) -> None:
     """Raise exception for any outdated attributes in args."""
@@ -84,9 +133,57 @@ class Harness:
     def add_connector(self, name: str, *args, **kwargs) -> None:
         check_old(f"Connector '{name}'", OLD_CONNECTOR_ATTR, kwargs)
         self.connectors[name] = Connector(name, *args, **kwargs)
+        self._extend_tweak(self.connectors[name])
 
     def add_cable(self, name: str, *args, **kwargs) -> None:
         self.cables[name] = Cable(name, *args, **kwargs)
+        self._extend_tweak(self.cables[name])
+
+    def _extend_tweak(self, node: Union[Connector, Cable]) -> None:
+        """Fold ``node.tweak`` into ``self.tweak`` after substituting the
+        node's name for the placeholder string.
+
+        Per-connector / per-cable ``tweak:`` entries let users author a
+        single template and have its ``override`` keys / ``append`` lines
+        rewritten with the actual designator at instantiation time. This
+        is the only place the placeholder substitution happens — the
+        global tweak is applied unchanged at graph emission time.
+        """
+        if not node.tweak:
+            return
+        ph = node.tweak.placeholder
+        # An empty string is a legal value to opt out of the global
+        # placeholder; only None falls back.
+        if ph is None:
+            ph = self.tweak.placeholder
+        # The replacement target may be None when an override deletes a
+        # key (``key: null`` in YAML), so guard the str.replace call.
+        if ph:
+            rph = lambda s: s.replace(ph, node.name) if isinstance(s, str) else s
+        else:
+            rph = lambda s: s
+
+        n_override = node.tweak.override or {}
+        s_override = self.tweak.override or {}
+        for ident, n_dict in n_override.items():
+            ident = rph(ident)
+            s_dict = s_override.get(ident, {})
+            for k, v in n_dict.items():
+                k, v = rph(k), rph(v)
+                if k in s_dict and v != s_dict[k]:
+                    raise ValueError(
+                        f"{node.name}.tweak.override.{ident}.{k} conflicts with another"
+                    )
+                s_dict[k] = v
+            # Keep the empty dict rather than collapsing to None — the
+            # graph-emission code (Harness.create_graph) expects values
+            # in self.tweak.override to be dicts, not None.
+            s_override[ident] = s_dict
+        self.tweak.override = s_override or None
+        self.tweak.append = (
+            make_list(self.tweak.append)
+            + [rph(v) for v in make_list(node.tweak.append)]
+        ) or None
 
     def add_mate_pin(self, from_name, from_pin, to_name, to_pin, arrow_type) -> None:
         self.mates.append(MatePin(from_name, from_pin, to_name, to_pin, arrow_type))
@@ -168,14 +265,20 @@ class Harness:
         dot = Graph()
         dot.body.append(f"// Graph generated by {APP_NAME} {__version__}\n")
         dot.body.append(f"// {APP_URL}\n")
-        dot.attr(
-            "graph",
+        graph_attrs = dict(
             rankdir="LR",
             ranksep="2",
             bgcolor=wv_colors.translate_color(self.options.bgcolor, "HEX"),
             nodesep="0.33",
             fontname=self.options.fontname,
-        )  # TODO: Add graph attribute: charset="utf-8",
+        )
+        # Pass dpi only when set; output_dpi: null in YAML means "let
+        # Graphviz pick its default" (96 for non-PostScript renderers).
+        # Stringified because the graphviz Python lib doesn't coerce
+        # numerics for us.
+        if self.options.output_dpi is not None:
+            graph_attrs["dpi"] = str(self.options.output_dpi)
+        dot.attr("graph", **graph_attrs)  # TODO: Add graph attribute: charset="utf-8",
         dot.attr(
             "node",
             shape="none",
@@ -678,6 +781,8 @@ class Harness:
         cleanup: bool = True,
         output_dir: Optional[Union[str, Path]] = None,
         output_name: Optional[str] = None,
+        template_dir: Optional[Union[str, Path]] = None,
+        yaml_source: Optional[str] = None,
     ) -> None:
         """Render the harness in the requested formats.
 
@@ -686,6 +791,35 @@ class Harness:
         ``filename`` is None, exactly one format must be requested and
         its bytes/text are written to stdout — supports piping the CLI
         into other tools.
+
+        If ``yaml_source`` is provided and PNG output is requested, the
+        YAML source string is embedded in the PNG as an iTXt chunk under
+        the key ``wireviz:yaml`` for round-trip editing. Recovery via
+        ``Harness.read_yaml_from_png()`` or ``wireviz.parse()`` with a
+        .png input file.
+
+        Args:
+            filename: Output base path (without extension). ``None``
+                routes a single format to stdout instead of writing files.
+            fmt: One or more formats from ``html``, ``png``, ``svg``,
+                ``gv``, ``tsv``, ``csv``, ``pdf``. A bare string is
+                normalized to a one-tuple.
+            view: Reserved (unused — kept for API compatibility with the
+                pre-refactor signature).
+            cleanup: Reserved (unused — kept for API compatibility).
+            output_dir: Output directory. Used only to populate the
+                ``<!-- %filename% -->`` HTML template placeholder and to
+                resolve a custom ``metadata.template.name`` reference.
+            output_name: Output base name (without extension). Used only
+                to populate the ``<!-- %filename_stem% -->`` HTML
+                template placeholder.
+            template_dir: Explicit directory to search first when
+                resolving a ``metadata.template.name`` reference. Falls
+                through to the YAML source directory, then ``output_dir``,
+                then the built-in templates shipped with WireViz.
+            yaml_source: Source YAML string. When non-None and PNG is in
+                ``fmt``, embedded as an iTXt chunk in the PNG output for
+                round-trip editing.
         """
         if isinstance(fmt, str):
             fmt = (fmt,)
@@ -693,14 +827,13 @@ class Harness:
             fmt,
             output_dir=output_dir,
             output_name=output_name,
+            template_dir=template_dir,
+            yaml_source=yaml_source,
         )
 
         if "csv" in fmt:
             # TODO: implement CSV output (preferably using CSV library)
             sys.stderr.write("CSV output is not yet supported\n")
-        if "pdf" in fmt:
-            # TODO: implement PDF output
-            sys.stderr.write("PDF output is not yet supported\n")
 
         if filename is None:
             # stdout mode — emit each rendered format in the user-requested order
@@ -728,12 +861,34 @@ class Harness:
         fmt: Union[str, Tuple[str, ...], List[str]],
         output_dir: Optional[Union[str, Path]] = None,
         output_name: Optional[str] = None,
+        template_dir: Optional[Union[str, Path]] = None,
+        yaml_source: Optional[str] = None,
     ) -> Dict[str, Union[str, bytes]]:
         """Produce in-memory representations of each requested format.
 
         Pipes graphviz once per binary output rather than via ``render()``
         + temporary files so the caller can write files OR pipe to stdout
         without the SVG-file roundtrip the previous implementation used.
+
+        Args:
+            fmt: One or more formats from ``html``, ``png``, ``svg``,
+                ``gv``, ``tsv``. ``csv`` and ``pdf`` are recognized at
+                the dispatch layer but not produced here. A bare string
+                is normalized to a one-tuple.
+            output_dir: Forwarded to ``generate_html_output`` for
+                ``<!-- %filename% -->`` and ``<!-- %diagram_png_b64% -->``
+                template-placeholder resolution, and as the third-priority
+                directory in the custom-template search path.
+            output_name: Forwarded to ``generate_html_output`` for
+                ``<!-- %filename_stem% -->`` resolution.
+            template_dir: Forwarded to ``generate_html_output`` as the
+                first-priority directory in the custom-template search
+                path.
+
+        Returns:
+            ``{format: bytes|str}``. Binary formats (``png``) yield
+            bytes; text formats (``svg``, ``html``, ``gv``, ``tsv``)
+            yield str.
         """
         if isinstance(fmt, str):
             fmt = (fmt,)
@@ -761,7 +916,12 @@ class Harness:
         png_bytes: Optional[bytes] = None
         if "png" in fmt:
             png_bytes = graph.pipe(format="png")
+            if yaml_source is not None:
+                png_bytes = _embed_yaml_in_png(png_bytes, yaml_source)
             outputs["png"] = png_bytes
+
+        if "pdf" in fmt:
+            outputs["pdf"] = graph.pipe(format="pdf")
 
         if "gv" in fmt:
             outputs["gv"] = graph.source
@@ -788,6 +948,7 @@ class Harness:
                     output_name=output_name,
                     png_b64=png_b64,
                     source_path=self.source_path,
+                    template_dir=template_dir,
                 )
 
         return outputs

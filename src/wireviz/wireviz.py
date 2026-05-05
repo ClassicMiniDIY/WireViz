@@ -54,7 +54,7 @@ def parse(
         * "gv":   the diagram, as a GraphViz source file
         * "html": the diagram and (depending on the template) the BOM, as a HTML file
         * "png":  the diagram, as a PNG raster image
-        * "pdf":  the diagram and (depending on the template) the BOM, as a PDF file
+        * "pdf":  the diagram, as a PDF document (no BOM — see "html" for that)
         * "svg":  the diagram, as a SVG vector image
         * "tsv":  the BOM, as a tab-separated text file
 

@@ -834,9 +834,6 @@ class Harness:
         if "csv" in fmt:
             # TODO: implement CSV output (preferably using CSV library)
             sys.stderr.write("CSV output is not yet supported\n")
-        if "pdf" in fmt:
-            # TODO: implement PDF output
-            sys.stderr.write("PDF output is not yet supported\n")
 
         if filename is None:
             # stdout mode — emit each rendered format in the user-requested order
@@ -922,6 +919,9 @@ class Harness:
             if yaml_source is not None:
                 png_bytes = _embed_yaml_in_png(png_bytes, yaml_source)
             outputs["png"] = png_bytes
+
+        if "pdf" in fmt:
+            outputs["pdf"] = graph.pipe(format="pdf")
 
         if "gv" in fmt:
             outputs["gv"] = graph.source

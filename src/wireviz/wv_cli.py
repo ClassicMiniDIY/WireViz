@@ -11,6 +11,7 @@ if __name__ == "__main__":
 
 import wireviz.wireviz as wv
 from wireviz import APP_NAME, __version__
+from wireviz.Harness import read_yaml_from_png
 from wireviz.wv_helper import file_read_text
 
 format_codes = {
@@ -72,13 +73,22 @@ epilog += ", ".join([f"{key} ({value.upper()})" for key, value in format_codes.i
     help="Directory searched first when resolving a metadata.template.name reference.",
 )
 @click.option(
+    "--no-embed-yaml",
+    "embed_yaml",
+    flag_value=False,
+    default=True,
+    help="Do not embed the source YAML in PNG output as an iTXt chunk.",
+)
+@click.option(
     "-V",
     "--version",
     is_flag=True,
     default=False,
     help=f"Output {APP_NAME} version and exit.",
 )
-def wireviz(file, format, prepend, output_dir, output_name, template_dir, version):
+def wireviz(
+    file, format, prepend, output_dir, output_name, template_dir, embed_yaml, version
+):
     """
     Parses the provided FILE and generates the specified outputs.
 
@@ -149,9 +159,28 @@ def wireviz(file, format, prepend, output_dir, output_name, template_dir, versio
             if not file.exists():
                 raise Exception(f"File does not exist:\n{file}")
 
-            yaml_input = prepend_input + file_read_text(file)
+            if file.suffix.lower() == ".png":
+                # PNG input: try to recover the YAML embedded by an
+                # earlier WireViz render. Catch PIL's UnidentifiedImageError
+                # (and anything else PIL throws for corrupt files) so the
+                # user sees a clean message instead of a stack trace.
+                try:
+                    embedded = read_yaml_from_png(file)
+                except Exception as exc:
+                    raise click.UsageError(
+                        f"Could not read PNG {file}: {exc}"
+                    ) from exc
+                if embedded is None:
+                    raise click.UsageError(
+                        f"{file} has no embedded WireViz YAML (no "
+                        f"'wireviz:yaml' iTXt chunk found)."
+                    )
+                yaml_input = prepend_input + embedded
+                sys.stderr.write(f"Input file:   {file} (extracted YAML)\n")
+            else:
+                yaml_input = prepend_input + file_read_text(file)
+                sys.stderr.write(f"Input file:   {file}\n")
             image_paths = {file.parent}
-            sys.stderr.write(f"Input file:   {file}\n")
             _output_dir = output_dir if output_dir else file.parent
             _output_name = output_name if output_name else file.stem
 
@@ -173,6 +202,7 @@ def wireviz(file, format, prepend, output_dir, output_name, template_dir, versio
             image_paths=list(image_paths),
             source_path=file,
             template_dir=template_dir,
+            embed_yaml=embed_yaml,
         )
 
     sys.stderr.write("\n")

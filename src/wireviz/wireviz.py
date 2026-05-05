@@ -33,6 +33,7 @@ def parse(
     image_paths: Union[Path, str, List] = [],
     source_path: Union[Path, str, None] = None,
     template_dir: Union[Path, str, None] = None,
+    embed_yaml: bool = True,
 ) -> Any:
     """
     This function takes an input, parses it as a WireViz Harness file,
@@ -88,6 +89,11 @@ def parse(
             ``metadata.template.name`` reference. Searched before the YAML
             source directory and the output directory; the built-in
             templates ship as the final fallback.
+        embed_yaml (bool, optional):
+            When True (default) and PNG output is requested, the YAML
+            source is embedded in the PNG as an iTXt chunk under the
+            ``wireviz:yaml`` key for round-trip editing. Set to False
+            to render plain PNGs without source-bearing metadata.
 
     Returns:
         Depending on the return_types parameter, may return:
@@ -101,7 +107,7 @@ def parse(
     if not output_formats and not return_types:
         raise Exception("No output formats or return types specified")
 
-    yaml_data, yaml_file = _get_yaml_data_and_path(inp)
+    yaml_data, yaml_file, yaml_str = _get_yaml_data_and_path(inp)
     if not isinstance(yaml_data, dict):
         raise TypeError(
             f"Expected a dict as top-level YAML input, but got: {type(yaml_data)}"
@@ -427,6 +433,7 @@ def parse(
         for line in yaml_data["additional_bom_items"]:
             harness.add_bom_item(line)
 
+    yaml_source_for_png = yaml_str if embed_yaml else None
     if output_formats:
         if write_to_stdout:
             if len(output_formats) != 1:
@@ -438,6 +445,7 @@ def parse(
                 fmt=output_formats,
                 view=False,
                 template_dir=template_dir,
+                yaml_source=yaml_source_for_png,
             )
         else:
             harness.output(
@@ -447,6 +455,7 @@ def parse(
                 output_dir=output_dir,
                 output_name=output_name,
                 template_dir=template_dir,
+                yaml_source=yaml_source_for_png,
             )
 
     if return_types:
@@ -467,7 +476,9 @@ def parse(
         return tuple(returns) if len(returns) != 1 else returns[0]
 
 
-def _get_yaml_data_and_path(inp: Union[str, Path, Dict]) -> (Dict, Path):
+def _get_yaml_data_and_path(
+    inp: Union[str, Path, Dict],
+) -> Tuple[Dict, Optional[Path], Optional[str]]:
     # determine whether inp is a file path, a YAML string, or a Dict
     if not isinstance(inp, Dict):  # received a str or a Path
         try:
@@ -494,10 +505,12 @@ def _get_yaml_data_and_path(inp: Union[str, Path, Dict]) -> (Dict, Path):
             yaml_path = None
         yaml_data = yaml.safe_load(yaml_str)
     else:
-        # received a Dict, use as-is
+        # received a Dict — serialize back to YAML so the caller has a
+        # text form for round-trip embedding into PNG output.
         yaml_data = inp
         yaml_path = None
-    return yaml_data, yaml_path
+        yaml_str = yaml.safe_dump(inp, sort_keys=False, allow_unicode=True)
+    return yaml_data, yaml_path, yaml_str
 
 
 def _get_output_dir(input_file: Path, default_output_dir: Path) -> Path:

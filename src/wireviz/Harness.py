@@ -726,9 +726,6 @@ class Harness:
         if "csv" in fmt:
             # TODO: implement CSV output (preferably using CSV library)
             sys.stderr.write("CSV output is not yet supported\n")
-        if "pdf" in fmt:
-            # TODO: implement PDF output
-            sys.stderr.write("PDF output is not yet supported\n")
 
         if filename is None:
             # stdout mode — emit each rendered format in the user-requested order
@@ -811,6 +808,9 @@ class Harness:
         if "png" in fmt:
             png_bytes = graph.pipe(format="png")
             outputs["png"] = png_bytes
+
+        if "pdf" in fmt:
+            outputs["pdf"] = graph.pipe(format="pdf")
 
         if "gv" in fmt:
             outputs["gv"] = graph.source

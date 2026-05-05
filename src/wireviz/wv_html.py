@@ -15,6 +15,17 @@ from wireviz.wv_helper import (
 )
 
 
+def _latest_revision(metadata: Metadata) -> str:
+    """Return the key of the most recently added entry in
+    ``metadata.revisions``. Relies on Python dict insertion-order
+    preservation; YAML parsers preserve the document order. Returns
+    "" if no revisions are declared."""
+    revisions = metadata.get("revisions") if metadata else None
+    if not revisions:
+        return ""
+    return str(list(revisions)[-1])
+
+
 def generate_html_output(
     svg_input: Union[str, None],
     bom_list: List[List[str]],
@@ -112,6 +123,7 @@ def generate_html_output(
         "<!-- %template_sheetsize% -->": metadata.get("template", {}).get(
             "sheetsize", ""
         ),
+        "<!-- %revision% -->": _latest_revision(metadata),
     }
 
     def replacement_if_used(key: str, func: Callable[[], str]) -> None:

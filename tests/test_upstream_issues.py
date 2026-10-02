@@ -5,6 +5,7 @@ Each test names the upstream issue it pins down. The triage of all open
 upstream issues is in ``docs/plans/2026-10-02-upstream-issue-triage.md``.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -960,6 +961,8 @@ def weasyprint_ok():
     try:
         import weasyprint  # noqa: F401
     except Exception as exc:
+        if os.environ.get("WIREVIZ_REQUIRE_PDF"):
+            pytest.fail(f"WIREVIZ_REQUIRE_PDF is set, but WeasyPrint does not load: {exc}")
         pytest.skip(f"WeasyPrint (wireviz[pdf]) not available: {exc}")
 
 

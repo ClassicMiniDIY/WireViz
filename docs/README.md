@@ -144,7 +144,7 @@ $ wireviz ~/path/to/files/*.yml
 
 ### Print-ready PDF sheet
 
-`wireviz -f D harness.yml` writes `harness.sheet.pdf`: the HTML page (diagram, BOM and, with the `din-6771` template, frame and title block) as a one-page PDF at the template's sheet size (`metadata.template.sheetsize`: A4, A3 or A2). It needs WeasyPrint:
+`wireviz -f D harness.yml` writes `harness.sheet.pdf`: the HTML page (diagram, BOM and, with the `din-6771` template, frame and title block) as a one-page PDF at the template's sheet size (`metadata.template.sheetsize`: A4, A3 or A2). It needs Python 3.10 or later and WeasyPrint:
 
 ```
 $ pip install "wireviz[pdf]"

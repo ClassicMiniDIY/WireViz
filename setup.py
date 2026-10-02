@@ -26,7 +26,8 @@ setup(
     ],
     extras_require={
         # print-ready sheet PDF (-f D); also needs the Pango system library
-        "pdf": ["weasyprint>=70"],
+        # (WeasyPrint 70 needs Python 3.10 or later)
+        "pdf": ["weasyprint>=70; python_version >= '3.10'"],
     },
     license="GPLv3",
     keywords="cable connector hardware harness wiring wiring-diagram wiring-harness",

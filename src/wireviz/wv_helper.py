@@ -165,6 +165,23 @@ def tuplelist2tsv(inp, header=None):
     return output
 
 
+def upper_first(text: str) -> str:
+    """Upper-case the first letter only ("EMI screen" stays as written)."""
+    return text[:1].upper() + text[1:]
+
+
+def tuplelist2csv(inp) -> str:
+    """Return the BOM rows as CSV text (RFC 4180 quoting, upstream #98)."""
+    import csv
+    import io
+
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    for row in flatten2d(inp):
+        writer.writerow([remove_links(str(item)) for item in row])
+    return out.getvalue()
+
+
 def remove_links(inp):
     return (
         re.sub(r"<[aA] [^>]*>([^<]*)</[aA]>", r"\1", inp)

@@ -22,6 +22,7 @@ from wireviz.wv_helper import (
     smart_file_resolve,
     yaml_load,
 )
+from wireviz.wv_images import is_data_uri, materialize_data_uri, materialize_webp
 from wireviz.wv_safety import UNTRUSTED_MAX_INPUT_BYTES, check_untrusted_image
 
 from . import APP_NAME
@@ -38,6 +39,7 @@ def parse(
     template_dir: Union[Path, str, None] = None,
     embed_yaml: bool = True,
     untrusted: bool = False,
+    disable_keys: Union[None, str, Tuple[str, ...], List[str]] = None,
 ) -> Any:
     """
     This function takes an input, parses it as a WireViz Harness file,
@@ -106,6 +108,11 @@ def parse(
             ``metadata.template.name`` must be a bare name; ``tweak`` is
             rejected; the SVG and the HTML output are sanitized; and each
             Graphviz call has a timeout. See ``wv_safety.py``.
+        disable_keys (str | list, optional):
+            Attributes to drop from every connector and cable before the
+            harness is built, e.g. ``"image"``; ``"X1.image"`` drops it
+            from one component only (upstream #410). Lets one YAML render
+            with and without images, notes, etc.
 
     Returns:
         Depending on the return_types parameter, may return:
@@ -134,6 +141,8 @@ def parse(
         )
     if untrusted:
         _reject_tweaks(yaml_data)
+    if disable_keys:
+        _disable_keys(yaml_data, disable_keys)
     # When inp was a Path, derive source_path automatically so callers
     # don't have to pass it twice. Matches the docstring contract.
     if source_path is None and yaml_file is not None:
@@ -198,6 +207,7 @@ def parse(
     # add items
     # parse YAML input file ====================================================
 
+    image_cache = {}  # image source -> materialized PNG, for this parse
     sections = ["connectors", "cables", "connections"]
     types = [dict, dict, list]
     for sec, ty in zip(sections, types):
@@ -223,7 +233,12 @@ def parse(
                             attribs = {**attribs, "image": dict(image)}
                             image = attribs["image"]
                             image_path = image["src"]
-                            if untrusted:
+                            if is_data_uri(image_path):
+                                # embedded image: decode to a file (#188, #322)
+                                image["src"] = materialize_data_uri(
+                                    image_path, harness.temp_dir(), image_cache
+                                )
+                            elif untrusted:
                                 image["src"] = check_untrusted_image(
                                     image_path, image_paths
                                 )
@@ -231,6 +246,14 @@ def parse(
                                 # resolve relative image path
                                 image["src"] = smart_file_resolve(
                                     image_path, image_paths
+                                )
+                            if str(image["src"]).lower().endswith(".webp"):
+                                # many Graphviz builds cannot load webp (#202)
+                                image["src"] = materialize_webp(
+                                    image["src"],
+                                    image_path,
+                                    harness.temp_dir(),
+                                    image_cache,
                                 )
                         if sec == "connectors":
                             template_connectors[key] = attribs
@@ -539,6 +562,26 @@ def parse(
                 returns.append(harness)
 
         return tuple(returns) if len(returns) != 1 else returns[0]
+
+
+def _disable_keys(yaml_data: Dict, keys) -> None:
+    """Drop attributes from connectors and cables: ``"image"`` from all of
+    them, ``"X1.image"`` from X1 only (upstream #410)."""
+    if isinstance(keys, str):
+        keys = [keys]
+    for key in keys:
+        component, _, attr = key.rpartition(".")
+        found = False
+        for section in ("connectors", "cables"):
+            entries = yaml_data.get(section) or {}
+            for name, attribs in entries.items():
+                if component and name != component:
+                    continue
+                if isinstance(attribs, dict) and attr in attribs:
+                    entries[name] = {k: v for k, v in attribs.items() if k != attr}
+                found = found or not component or name == component
+        if component and not found:
+            raise ValueError(f"disable_keys: no connector or cable named {component}")
 
 
 def _reject_tweaks(yaml_data: Dict) -> None:

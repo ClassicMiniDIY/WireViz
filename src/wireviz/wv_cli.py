@@ -15,7 +15,7 @@ from wireviz.Harness import read_yaml_from_png
 from wireviz.wv_helper import file_read_text
 
 format_codes = {
-    # "c": "csv",
+    "c": "csv",
     "g": "gv",
     "h": "html",
     "p": "png",
@@ -80,6 +80,15 @@ epilog += ", ".join([f"{key} ({value.upper()})" for key, value in format_codes.i
     help="Do not embed the source YAML in PNG output as an iTXt chunk.",
 )
 @click.option(
+    "--disable-key",
+    "disable_keys",
+    multiple=True,
+    metavar="KEY",
+    help="Drop an attribute from every connector and cable (e.g. image), "
+    "or from one (e.g. X1.image, where X1 is the key under connectors: or "
+    "cables:). Repeatable.",
+)
+@click.option(
     "-V",
     "--version",
     is_flag=True,
@@ -87,7 +96,15 @@ epilog += ", ".join([f"{key} ({value.upper()})" for key, value in format_codes.i
     help=f"Output {APP_NAME} version and exit.",
 )
 def wireviz(
-    file, format, prepend, output_dir, output_name, template_dir, embed_yaml, version
+    file,
+    format,
+    prepend,
+    output_dir,
+    output_name,
+    template_dir,
+    embed_yaml,
+    disable_keys,
+    version,
 ):
     """
     Parses the provided FILE and generates the specified outputs.
@@ -240,6 +257,7 @@ def wireviz(
             source_path=file,
             template_dir=template_dir,
             embed_yaml=embed_yaml,
+            disable_keys=disable_keys,
         )
 
     click.echo("", err=True)

@@ -23,6 +23,19 @@ Fixes for open issues in the original [wireviz/WireViz](https://github.com/wirev
 - `image: file.png` works as a short form of `image: {src: file.png}` ([#292](https://github.com/wireviz/WireViz/issues/292)).
 - Loops accept pin labels ([#432](https://github.com/wireviz/WireViz/issues/432)); loops on non-sequential pin numbers have a regression test ([#465](https://github.com/wireviz/WireViz/issues/465)).
 
+### New features
+
+- CSV BOM output: `-f c` / `output_formats="csv"` writes `<name>.bom.csv` ([#98](https://github.com/wireviz/WireViz/issues/98)).
+- Loop colors: `loops: [{RD: [VCC, SENSE]}]` ([#457](https://github.com/wireviz/WireViz/issues/457)).
+- `options.show_title: true` draws `metadata.title` above the diagram in PNG, SVG and PDF ([#460](https://github.com/wireviz/WireViz/issues/460)).
+- `--disable-key KEY` (CLI) and `parse(disable_keys=...)` drop an attribute such as `image` from all components, or `X1.image` from one ([#410](https://github.com/wireviz/WireViz/issues/410)).
+- Cable `show_box: false` hides the cable box and draws each wire straight from connector to connector ([#212](https://github.com/wireviz/WireViz/issues/212), [#453](https://github.com/wireviz/WireViz/issues/453)).
+- CSS/HTML color names such as `lightgreen` or `tomato` ([#135](https://github.com/wireviz/WireViz/issues/135), [#271](https://github.com/wireviz/WireViz/issues/271)).
+- `.webp` images are converted to PNG before rendering ([#202](https://github.com/wireviz/WireViz/issues/202)).
+- Embedded images: `image: data:image/png;base64,...` ([#188](https://github.com/wireviz/WireViz/issues/188), [#322](https://github.com/wireviz/WireViz/issues/322)). This also works in untrusted mode, which allows no file paths.
+- `options.terminology` replaces "pin", "wire" and "shield" in the diagram and BOM ([#331](https://github.com/wireviz/WireViz/issues/331)).
+- Connector `strip: {sleeve: 10, insulation: 2.5}` shows stripping lengths in the diagram ([#296](https://github.com/wireviz/WireViz/issues/296)).
+
 ## [1.0.0] (2026-10-02)
 
 Security hardening and bug fixes from the October 2026 audit. First stable release of the fork. Design and threat model: [docs/plans/2026-10-02-october-2026-audit.md](plans/2026-10-02-october-2026-audit.md).

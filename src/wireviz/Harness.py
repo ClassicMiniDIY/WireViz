@@ -12,7 +12,7 @@ from itertools import zip_longest
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, List, Optional, Set, Tuple, Union
 
-from graphviz import Graph
+from graphviz import Graph, nohtml
 from graphviz.quoting import attr_list, quote
 
 from wireviz import APP_NAME, APP_URL, __version__, wv_colors
@@ -57,7 +57,9 @@ from wireviz.wv_helper import (
     flatten2d,
     is_arrow,
     mm2_equiv,
+    tuplelist2csv,
     tuplelist2tsv,
+    upper_first,
 )
 from wireviz.wv_html import generate_html_output
 from wireviz.wv_safety import (
@@ -221,7 +223,8 @@ def _edge(dot: Graph, tail: tuple, head: tuple, **attrs) -> None:
     """
 
     def endpoint(node, port, compass) -> str:
-        parts = [quote(str(node))]
+        # nohtml: a name like "<X1>" is a plain string, not an HTML label
+        parts = [quote(nohtml(str(node)))]
         if port:
             parts.append(quote(port))
         if compass:
@@ -257,6 +260,20 @@ class Harness:
         self.mates = []
         self._bom = []  # Internal Cache for generated bom
         self.additional_bom_items = []
+        self._temp_dir: Optional[Path] = None
+
+    def temp_dir(self) -> Path:
+        """A private directory for files this harness generates (images
+        decoded from data URIs, converted .webp). It is removed when the
+        Harness object is garbage-collected."""
+        if self._temp_dir is None:
+            import shutil
+            import tempfile
+            import weakref
+
+            self._temp_dir = Path(tempfile.mkdtemp(prefix="wireviz-")).resolve()
+            weakref.finalize(self, shutil.rmtree, str(self._temp_dir), True)
+        return self._temp_dir
 
     def add_connector(self, name: str, *args, **kwargs) -> None:
         check_old(f"Connector '{name}'", OLD_CONNECTOR_ATTR, kwargs)
@@ -321,6 +338,14 @@ class Harness:
         self.mates.append(MatePin(from_name, from_pin, to_name, to_pin, arrow_type))
         self.connectors[from_name].activate_pin(from_pin, Side.RIGHT)
         self.connectors[to_name].activate_pin(to_pin, Side.LEFT)
+
+    def _pin_endpoint(self, name: str, pin, side: str, compass: str) -> tuple:
+        """Return the ``(node, port, compass)`` of a connector pin; the port
+        is None for simple connectors, which have no pin table."""
+        connector = self.connectors[name]
+        if connector.style == "simple":
+            return (name, None, compass)
+        return (name, f"p{connector.pins.index(pin) + 1}{side}", compass)
 
     def _resolve_pin(self, name: str, pin):
         """Return the pin number for ``pin`` on connector ``name``, where
@@ -420,6 +445,15 @@ class Harness:
         # numerics for us.
         if self.options.output_dpi is not None:
             graph_attrs["dpi"] = str(self.options.output_dpi)
+        if self.options.show_title and self.metadata.get("title"):
+            # A plain-text graph label: graphviz quotes it (#460).
+            graph_attrs.update(
+                # Backslashes doubled: DOT reads \N, \G and a trailing \
+                # in a label as escapes.
+                label=nohtml(str(self.metadata["title"]).replace("\\", "\\\\")),
+                labelloc="t",
+                fontsize="20",
+            )
         dot.attr("graph", **graph_attrs)  # TODO: Add graph attribute: charset="utf-8",
         dot.attr(
             "node",
@@ -432,6 +466,14 @@ class Harness:
             fontname=self.options.fontname,
         )
         dot.attr("edge", style="bold", fontname=self.options.fontname)
+
+        # determine if there are double- or triple-colored wires in the harness;
+        # if so, pad single-color wires and loops to make all wires of equal thickness
+        pad = any(
+            len(get_color_hex(colorstr)) > 1
+            for cable in self.cables.values()
+            for colorstr in cable.colors
+        )
 
         for connector in self.connectors.values():
             # If no wires connected (except maybe loop wires)?
@@ -451,7 +493,7 @@ class Harness:
                      html_line_breaks(pn_info_string(HEADER_SPN, connector.supplier, connector.spn))],
                     [html_line_breaks(connector.type),
                      html_line_breaks(connector.subtype),
-                     f'{connector.pincount}-pin' if connector.show_pincount else None,
+                     f'{connector.pincount}-{html_text(self.options.terminology.pin)}' if connector.show_pincount else None,
                      html_text(translate_color(connector.color, self.options.color_mode)) if connector.color else None,
                      html_colorbar(connector.color)],
                     '<!-- connector table -->' if connector.style != 'simple' else None,
@@ -460,6 +502,8 @@ class Harness:
             # fmt: on
 
             rows.extend(get_additional_component_table(self, connector))
+            if connector.strip and connector.strip.description():
+                rows.append([html_text(connector.strip.description())])
             rows.append([html_line_breaks(connector.notes)])
             html.extend(nested_html_table(rows, html_bgcolor_attr(connector.bgcolor)))
 
@@ -488,7 +532,9 @@ class Harness:
                     if pinlabel:
                         pinhtml.append(f"    <td>{html_text(pinlabel)}</td>")
                     if connector.pincolors:
-                        if pincolor in wv_colors._color_hex.keys():
+                        if pincolor in wv_colors._color_hex or wv_colors.css_color_hex(
+                            pincolor
+                        ):
                             # fmt: off
                             pinhtml.append(f'    <td sides="tbl">{html_text(translate_color(pincolor, self.options.color_mode))}</td>')
                             pinhtml.append( '    <td sides="tbr">')
@@ -520,7 +566,7 @@ class Harness:
             if self.untrusted:
                 check_html_label(html, f"Connector {connector.name}")
             dot.node(
-                connector.name,
+                nohtml(connector.name),
                 label=f"<\n{html}\n>",
                 shape="box",
                 style="filled",
@@ -528,8 +574,21 @@ class Harness:
             )
 
             if len(connector.loops) > 0:
-                dot.attr("edge", color="#000000:#ffffff:#000000")
-                for loop, (side_a, side_b) in zip(connector.loops, loop_sides):
+                for loop, (side_a, side_b), loop_color in zip(
+                    connector.loops, loop_sides, connector.loop_colors
+                ):
+                    dot.attr(
+                        "edge",
+                        color=":".join(
+                            ["#000000"]
+                            + (
+                                get_color_hex(loop_color, pad=pad)
+                                if loop_color
+                                else ["#ffffff"]
+                            )
+                            + ["#000000"]
+                        ),
+                    )
                     # Pin port IDs are 1-based positions in the pin table,
                     # NOT pin numbers (see the pin HTML emission above,
                     # `port="p{pinindex+1}..."`). Translate pin numbers to
@@ -547,14 +606,6 @@ class Harness:
                         (connector.name, f"p{pos_b}{s_b}", d_b),
                         label=" ",  # Work-around to avoid over-sized loops.
                     )
-
-        # determine if there are double- or triple-colored wires in the harness;
-        # if so, pad single-color wires to make all wires of equal thickness
-        pad = any(
-            len(get_color_hex(colorstr)) > 1
-            for cable in self.cables.values()
-            for colorstr in cable.colors
-        )
 
         for cable in self.cables.values():
             html = []
@@ -682,7 +733,9 @@ class Harness:
                 wirehtml.append("   <tr><td>&nbsp;</td></tr>")  # spacer
                 wirehtml.append("   <tr>")
                 wirehtml.append("    <td><!-- s_in --></td>")
-                wirehtml.append("    <td>Shield</td>")
+                wirehtml.append(
+                    f"    <td>{html_text(upper_first(self.options.terminology.shield))}</td>"
+                )
                 wirehtml.append("    <td><!-- s_out --></td>")
                 wirehtml.append("   </tr>")
                 if isinstance(cable.shield, str):
@@ -729,6 +782,24 @@ class Harness:
                             else "#000000"
                         ),
                     )
+                if not cable.show_box:
+                    # show_box: false (upstream #212): no cable node; each wire
+                    # is one edge straight from connector to connector.
+                    if connection.from_pin is None or connection.to_pin is None:
+                        raise ValueError(
+                            f"Cable {cable.name}: show_box: false needs a "
+                            "connector at both ends of every wire"
+                        )
+                    _edge(
+                        dot,
+                        self._pin_endpoint(
+                            connection.from_name, connection.from_pin, "r", "e"
+                        ),
+                        self._pin_endpoint(
+                            connection.to_name, connection.to_pin, "l", "w"
+                        ),
+                    )
+                    continue
                 if connection.from_pin is not None:  # connect to left
                     from_connector = self.connectors[connection.from_name]
                     from_pin_index = from_connector.pins.index(connection.from_pin)
@@ -791,15 +862,16 @@ class Harness:
                 else ("filled", self.options.bgcolor_cable)
             )
             html = "\n".join(html)
-            if self.untrusted:
+            if self.untrusted and cable.show_box:
                 check_html_label(html, f"Cable {cable.name}")
-            dot.node(
-                cable.name,
-                label=f"<\n{html}\n>",
-                shape="box",
-                style=style,
-                fillcolor=translate_color(bgcolor, "HEX"),
-            )
+            if cable.show_box:
+                dot.node(
+                    nohtml(cable.name),
+                    label=f"<\n{html}\n>",
+                    shape="box",
+                    style=style,
+                    fillcolor=translate_color(bgcolor, "HEX"),
+                )
 
         # mates
         for mate in self.mates:
@@ -1034,10 +1106,6 @@ class Harness:
             yaml_source=yaml_source,
         )
 
-        if "csv" in fmt:
-            # TODO: implement CSV output (preferably using CSV library)
-            sys.stderr.write("CSV output is not yet supported\n")
-
         if filename is None:
             # stdout mode — emit each rendered format in the user-requested
             # order. Text is written as UTF-8 bytes: text-mode stdout uses
@@ -1060,7 +1128,7 @@ class Harness:
                 out.flush()
             return
 
-        suffix_map = {"tsv": "bom.tsv"}
+        suffix_map = {"tsv": "bom.tsv", "csv": "bom.csv"}
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
         for f, content in outputs.items():
             ext = suffix_map.get(f, f)
@@ -1142,10 +1210,12 @@ class Harness:
         if "gv" in fmt:
             outputs["gv"] = graph.source
 
-        if "tsv" in fmt or "html" in fmt:
+        if "tsv" in fmt or "csv" in fmt or "html" in fmt:
             bomlist = bom_list(self.bom())
             if "tsv" in fmt:
                 outputs["tsv"] = tuplelist2tsv(bomlist)
+            if "csv" in fmt:
+                outputs["csv"] = tuplelist2csv(bomlist)
             if "html" in fmt:
                 # Inline PNG as base64 in the HTML only when the PNG was
                 # rendered in this same call; otherwise let the template

@@ -4,6 +4,10 @@
 
 Fixes for open issues in the original [wireviz/WireViz](https://github.com/wireviz/WireViz) repository. Triage: [docs/plans/2026-10-02-upstream-issue-triage.md](plans/2026-10-02-upstream-issue-triage.md).
 
+### Security
+
+- Untrusted mode: `image.scale` was written without escaping into the generated `<img>` tag, which let markup hide a second image that Graphviz then read into PNG/PDF output. `scale` now accepts only `false`, `true`, `width`, `height` or `both`.
+
 ### Bug fixes
 
 - A wire number beyond the cable's wire count, or an unknown wire label, gives a clear error ([#208](https://github.com/wireviz/WireViz/issues/208)). An unknown label used to be drawn as the shield.

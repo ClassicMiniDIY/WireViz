@@ -721,3 +721,118 @@ connections:
 """
     h = parse(src, return_types="harness")
     assert len(h.cables) == 2
+
+
+# ===========================================================================
+# Batch C2 — include (#220)
+# ===========================================================================
+
+
+def _write(path: Path, text: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+MAIN_WITH_INCLUDE = """
+include: [lib/parts.yml]
+connections:
+  - - X1: [1, 2]
+    - W1: [1, 2]
+    - X2: [1, 2]
+"""
+
+
+def test_issue220_include_merges_library(tmp_path: Path):
+    _write(
+        tmp_path / "lib/parts.yml",
+        "connectors:\n  X1: {pinlabels: [A, B]}\n  X2: {pinlabels: [A, B]}\n"
+        "cables:\n  W1: {wirecount: 2}\n",
+    )
+    main = _write(tmp_path / "main.yml", MAIN_WITH_INCLUDE)
+    h = parse(main, return_types="harness")
+    assert set(h.connectors) == {"X1", "X2"} and "W1" in h.cables
+
+
+def test_issue220_main_file_wins_and_includes_conflict(tmp_path: Path):
+    _write(
+        tmp_path / "a.yml", "connectors:\n  X1: {pincount: 2}\n  X3: {pincount: 1}\n"
+    )
+    _write(tmp_path / "b.yml", "connectors:\n  X3: {pincount: 5}\n")
+    main = _write(
+        tmp_path / "main.yml",
+        "include: [a.yml]\nconnectors:\n  X1: {pincount: 9}\nconnections: [[X1]]\n",
+    )
+    assert parse(main, return_types="harness").connectors["X1"].pincount == 9
+    clash = _write(tmp_path / "clash.yml", "include: [a.yml, b.yml]\nconnections: []\n")
+    with pytest.raises(ValueError, match="connectors.X3 is defined in both"):
+        parse(clash, return_types="harness")
+
+
+def test_issue220_nested_cycle_and_main_only_sections(tmp_path: Path):
+    _write(tmp_path / "a.yml", "include: [b.yml]\nconnectors: {XA: {pincount: 1}}\n")
+    _write(tmp_path / "b.yml", "connectors: {XB: {pincount: 1}}\n")
+    main = _write(tmp_path / "m.yml", "include: [a.yml]\nconnections: [[XA], [XB]]\n")
+    assert set(parse(main, return_types="harness").connectors) == {"XA", "XB"}
+
+    _write(tmp_path / "c1.yml", "include: [c2.yml]\n")
+    _write(tmp_path / "c2.yml", "include: [c1.yml]\n")
+    cyc = _write(tmp_path / "cyc.yml", "include: [c1.yml]\n")
+    with pytest.raises(ValueError, match="cycle"):
+        parse(cyc, return_types="harness")
+
+    _write(tmp_path / "opt.yml", "options: {fontname: arial}\n")
+    bad = _write(tmp_path / "bad.yml", "include: opt.yml\n")
+    with pytest.raises(ValueError, match="options is allowed only in the main file"):
+        parse(bad, return_types="harness")
+
+
+def test_issue220_include_paths_and_cli(tmp_path: Path, runner):
+    from wireviz.wv_cli import wireviz as cli
+
+    _write(
+        tmp_path / "shared/lib/parts.yml",
+        "connectors:\n  X1: {pincount: 2}\n  X2: {pincount: 2}\ncables:\n  W1: {wirecount: 2}\n",
+    )
+    main = _write(tmp_path / "proj/main.yml", MAIN_WITH_INCLUDE)
+    with pytest.raises(FileNotFoundError):
+        parse(main, return_types="harness")
+    assert parse(main, return_types="harness", include_paths=[tmp_path / "shared"])
+    result = runner.invoke(cli, ["-f", "s", "-I", str(tmp_path / "shared"), str(main)])
+    assert result.exit_code == 0, result.stderr
+    assert (tmp_path / "proj/main.svg").exists()
+
+
+def test_issue220_images_resolve_against_included_file(tmp_path: Path):
+    _write(tmp_path / "lib/img/pic.png", "")
+    (tmp_path / "lib/img/pic.png").write_bytes(TRS.read_bytes())
+    _write(
+        tmp_path / "lib/parts.yml",
+        "connectors:\n  X1: {pincount: 1, image: img/pic.png}\n",
+    )
+    main = _write(
+        tmp_path / "main.yml", "include: [lib/parts.yml]\nconnections: [[X1]]\n"
+    )
+    assert "data:image/png;base64," in parse(main, return_types="svg")
+
+
+def test_issue220_png_embeds_merged_yaml(tmp_path: Path):
+    import io
+
+    from wireviz.Harness import read_yaml_from_png
+
+    _write(tmp_path / "lib.yml", "connectors:\n  X1: {pincount: 1}\n")
+    main = _write(tmp_path / "main.yml", "include: [lib.yml]\nconnections: [[X1]]\n")
+    png = parse(main, return_types="png")
+    embedded = read_yaml_from_png(io.BytesIO(png))
+    assert "include" not in embedded and "X1" in embedded
+    assert parse(embedded, return_types="harness").connectors["X1"]
+
+
+def test_issue220_untrusted_refuses_include():
+    with pytest.raises(ValueError, match="include is not allowed"):
+        parse(
+            "include: [/etc/hosts]\nconnectors: {}\n",
+            return_types="harness",
+            untrusted=True,
+        )

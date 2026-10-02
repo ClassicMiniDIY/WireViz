@@ -24,6 +24,7 @@ from wireviz.wv_helper import (
     yaml_load,
 )
 from wireviz.wv_images import is_data_uri, materialize_data_uri, materialize_webp
+from wireviz.wv_include import resolve_includes
 from wireviz.wv_safety import UNTRUSTED_MAX_INPUT_BYTES, check_untrusted_image
 
 from . import APP_NAME
@@ -41,6 +42,7 @@ def parse(
     embed_yaml: bool = True,
     untrusted: bool = False,
     disable_keys: Union[None, str, Tuple[str, ...], List[str]] = None,
+    include_paths: Union[None, str, Path, List] = None,
 ) -> Any:
     """
     This function takes an input, parses it as a WireViz Harness file,
@@ -114,6 +116,10 @@ def parse(
             harness is built, e.g. ``"image"``; ``"X1.image"`` drops it
             from one component only (upstream #410). Lets one YAML render
             with and without images, notes, etc.
+        include_paths (Path | str | List, optional):
+            Directories searched for files named in a top-level
+            ``include:`` list, after the including file's directory
+            (upstream #220). See ``wv_include.py``.
 
     Returns:
         Depending on the return_types parameter, may return:
@@ -142,6 +148,21 @@ def parse(
         )
     if untrusted:
         _reject_tweaks(yaml_data)
+        if "include" in yaml_data:
+            raise ValueError("include is not allowed for untrusted input")
+    if "include" in yaml_data:
+        base = yaml_file or (
+            Path(source_path)
+            if source_path is not None and str(source_path) != "-"
+            else None
+        )
+        if isinstance(include_paths, (str, Path)):
+            include_paths = [include_paths]
+        resolve_includes(
+            yaml_data, base.parent if base else Path.cwd(), list(include_paths or [])
+        )
+        # A PNG must be self-contained: embed the merged YAML.
+        yaml_str = _yaml_source(yaml_data, None)
     if disable_keys:
         _disable_keys(yaml_data, disable_keys)
     # When inp was a Path, derive source_path automatically so callers

@@ -30,6 +30,7 @@ Fixes for open issues in the original [wireviz/WireViz](https://github.com/wirev
 
 ### New features
 
+- `include:` merges shared connector/cable libraries from other files; `-I/--include-path` adds search directories ([#220](https://github.com/wireviz/WireViz/issues/220)). Not allowed in untrusted mode.
 - A cable with no `wirecount` or `colors` takes its wire count from the wire numbers used in the connections ([#508](https://github.com/wireviz/WireViz/issues/508)).
 
 - CSV BOM output: `-f c` / `output_formats="csv"` writes `<name>.bom.csv` ([#98](https://github.com/wireviz/WireViz/issues/98)).

@@ -368,6 +368,28 @@ connections:
 If any component is defined in the `connectors` or `cables` sections but not referenced in `connections`, a warning is printed in the console.
 
 
+## Include files
+
+A harness file can pull shared connector and cable definitions from other files:
+
+```yaml
+include:              # a file name or a list of file names
+  - lib/connectors.yml
+  - lib/cables.yml
+```
+
+- Paths are relative to the including file. The CLI option `-I/--include-path <dir>` (or `parse(include_paths=...)`) adds directories to search after that.
+- `connectors` and `cables` are merged by name. A definition in the including file wins over the same name in an included file. The same name in two included files is an error that names both files.
+- `additional_bom_items` from included files are added.
+- `metadata`, `options`, `tweak` and `connections` are allowed only in the main file.
+- Included files may include other files. A loop of includes is an error.
+- A relative `image: src:` in an included file is relative to that file.
+- Each file is read on its own, so YAML anchors (`&name`, `*name`, `<<:`) do not work across files.
+- A PNG output embeds the merged YAML, so it does not depend on the library files.
+
+The older CLI option `-p/--prepend <file>` still works: it puts the text of the file in front of the main file, so anchors defined there can be used in the main file. Prefer `include:`: with `--prepend`, two files that both have a `connectors:` section silently lose the first one.
+
+
 ## Metadata entries
 
 ```yaml

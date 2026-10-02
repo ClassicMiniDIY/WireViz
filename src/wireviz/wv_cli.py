@@ -81,6 +81,15 @@ epilog += ", ".join([f"{key} ({value.upper()})" for key, value in format_codes.i
     help="Do not embed the source YAML in PNG output as an iTXt chunk.",
 )
 @click.option(
+    "-I",
+    "--include-path",
+    "include_paths",
+    multiple=True,
+    type=Path,
+    help="Directory searched for files named in include: (after the "
+    "including file's directory). Repeatable.",
+)
+@click.option(
     "--disable-key",
     "disable_keys",
     multiple=True,
@@ -110,6 +119,7 @@ def wireviz(
     output_name,
     template_dir,
     embed_yaml,
+    include_paths,
     disable_keys,
     debug,
     version,
@@ -267,6 +277,7 @@ def wireviz(
                 template_dir=template_dir,
                 embed_yaml=embed_yaml,
                 disable_keys=disable_keys,
+                include_paths=list(include_paths),
             )
         except (ValueError, TypeError, yaml.YAMLError, FileNotFoundError) as exc:
             # An error in the input: one clear line, no traceback (#505).

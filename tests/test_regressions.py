@@ -7,6 +7,7 @@ regress to the pre-fix state. Each test cites the PR (or PRs) it
 guards.
 """
 
+import io
 import re
 from pathlib import Path
 
@@ -482,3 +483,143 @@ def test_pr10_review_missing_input_clean_error(runner, workdir: Path):
     result = runner.invoke(cli, [str(workdir / "missing.yml")])
     assert result.exit_code == 2
     assert "does not exist" in result.stderr.lower()
+
+
+# ===========================================================================
+# October 2026 audit — parse() API bugs
+# (docs/plans/2026-10-02-october-2026-audit.md, bug numbers in brackets)
+# ===========================================================================
+
+TRS_PNG = (
+    Path(__file__).resolve().parent.parent
+    / "examples"
+    / "resources"
+    / "stereo-phone-plug-TRS.png"
+)
+
+
+def _two_dirs_with_logo(tmp_path: Path):
+    dirs = []
+    for name, color in (("a", "red"), ("b", "blue")):
+        d = tmp_path / name
+        d.mkdir()
+        Image.new("RGB", (4, 4), color).save(d / "logo.png")
+        (d / "h.yml").write_text(
+            "connectors:\n  X1:\n    pincount: 1\n    image: {src: logo.png}\n"
+            "connections: [[X1]]\n"
+        )
+        dirs.append(d)
+    return dirs
+
+
+def test_audit_1_image_paths_do_not_leak_between_calls(tmp_path: Path):
+    """[1] Each call resolves images against its own file's directory."""
+    a, b = _two_dirs_with_logo(tmp_path)
+    parse(a / "h.yml", return_types="harness")
+    h = parse(b / "h.yml", return_types="harness")
+    assert Path(h.connectors["X1"].image.src).parent == b.resolve()
+
+
+def test_audit_1_image_paths_accepts_str(tmp_path: Path):
+    a, _ = _two_dirs_with_logo(tmp_path)
+    h = parse((a / "h.yml").read_text(), return_types="harness", image_paths=str(a))
+    assert Path(h.connectors["X1"].image.src).parent == a.resolve()
+
+
+def test_audit_3_info_message_not_on_stdout(loopback_yaml: Path, capsys):
+    """[3] The loop-only auto-instantiate notice must not corrupt -O -."""
+    parse(loopback_yaml, output_formats=("svg",), output_dir="-")
+    captured = capsys.readouterr()
+    assert captured.out.lstrip().startswith("<?xml")
+    assert "auto-instantiating" in captured.err
+
+
+def test_audit_4_dict_with_path_values(tmp_path: Path):
+    """[4] Dict input with values YAML cannot represent still parses;
+    a PNG is produced without the embedded chunk."""
+    data = {
+        "connectors": {"X1": {"pincount": 1, "image": {"src": TRS_PNG}}},
+        "connections": [["X1"]],
+    }
+    assert parse(data, return_types="harness").connectors["X1"].image
+    png = parse(data, return_types="png")
+    assert png.startswith(b"\x89PNG") and b"wireviz:yaml" not in png
+
+
+def test_audit_5_output_dir_is_created(tmp_path: Path, minimal_yaml: Path):
+    """[5] Regression from the stdin/stdout port: a missing output
+    directory is created, as graphviz.render() used to do."""
+    out = tmp_path / "new" / "dir"
+    parse(minimal_yaml, output_formats=("svg",), output_dir=out)
+    assert (out / "minimal.svg").exists()
+
+
+def test_audit_7_source_path_resolves_images_for_str_input(tmp_path: Path):
+    """[7] source_path supplies the image directory for str/dict input."""
+    a, _ = _two_dirs_with_logo(tmp_path)
+    svg = parse(
+        (a / "h.yml").read_text(), return_types="svg", source_path=a / "h.yml"
+    )
+    assert "data:image/png;base64," in svg
+
+
+def test_audit_8_non_utf8_file_raises(tmp_path: Path):
+    """[8] A real file that is not UTF-8 raises instead of being parsed
+    as a YAML string made of its path."""
+    f = tmp_path / "latin1.yml"
+    f.write_bytes("connectors: {X1: {pincount: 1, notes: '25\xb0C'}}\n".encode("latin-1"))
+    with pytest.raises(UnicodeDecodeError):
+        parse(str(f), return_types="harness")
+
+
+def test_audit_8_missing_path_object_raises(tmp_path: Path):
+    """[8] A Path input is always a file, never YAML text."""
+    with pytest.raises(FileNotFoundError):
+        parse(tmp_path / "missing.yml", return_types="harness")
+
+
+def test_audit_8_png_path_input(tmp_path: Path, minimal_yaml: Path):
+    """[8] parse() accepts a WireViz PNG, as Harness.output documents."""
+    parse(minimal_yaml, output_formats=("png",), output_dir=tmp_path)
+    h = parse(tmp_path / "minimal.png", return_types="harness")
+    assert "X1" in h.connectors
+
+
+def test_audit_10_output_formats_as_str(minimal_yaml: Path, capsys):
+    """[10] output_formats="svg" is one format, not three letters."""
+    parse(minimal_yaml, output_formats="svg", output_dir="-")
+    assert "<svg" in capsys.readouterr().out
+
+
+def test_audit_17_yaml_alias_in_connections():
+    """[17] A connection set reused through a YAML alias."""
+    src = """
+connectors:
+  X1: {pincount: 2}
+  X2: {pincount: 2}
+cables:
+  W1: {wirecount: 2}
+  W2: {wirecount: 2}
+connections:
+  - &pair
+    - X1: [1, 2]
+    - W1: [1, 2]
+  - *pair
+  - - X2: [1, 2]
+    - W2: [1, 2]
+"""
+    h = parse(src, return_types="harness")
+    assert len(h.cables["W1"].connections) == 4
+
+
+@pytest.mark.parametrize("section", ["metadata", "options", "tweak"])
+def test_audit_18_empty_sections(section: str):
+    """[18] `metadata:` with no value (None) is the same as `{}`."""
+    src = f"{section}:\nconnectors: {{X1: {{pincount: 1}}}}\nconnections: [[X1]]\n"
+    assert parse(src, return_types="harness")
+
+
+def test_audit_png_return_matches_file_output(minimal_yaml: Path):
+    """parse(return_types="png") embeds the YAML like file output."""
+    png = parse(minimal_yaml, return_types="png")
+    assert read_yaml_from_png(io.BytesIO(png)) == minimal_yaml.read_text()

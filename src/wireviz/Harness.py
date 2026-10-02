@@ -948,6 +948,7 @@ class Harness:
             return
 
         suffix_map = {"tsv": "bom.tsv"}
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
         for f, content in outputs.items():
             ext = suffix_map.get(f, f)
             out_path = f"{filename}.{ext}"

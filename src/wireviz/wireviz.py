@@ -117,6 +117,12 @@ def parse(
 
     if not output_formats and not return_types:
         raise Exception("No output formats or return types specified")
+    # A bare string names one format ("svg"), not a sequence of letters.
+    if isinstance(output_formats, str):
+        output_formats = (output_formats,)
+    if isinstance(return_types, str):
+        return_types = (return_types,)
+    return_types = tuple(t.lower() for t in return_types or ())
 
     yaml_data, yaml_file, yaml_str = _get_yaml_data_and_path(inp, untrusted)
     if not isinstance(yaml_data, dict):
@@ -150,9 +156,13 @@ def parse(
         image_paths = [image_paths]
     else:
         image_paths = list(image_paths)
-    if yaml_file:
-        # if reading from file, ensure that input file's parent directory is included in image_paths
-        default_image_path = yaml_file.parent.resolve()
+    # Relative image paths resolve against the YAML file's directory: the
+    # input file itself, or source_path for str/dict input.
+    image_source = yaml_file or (
+        Path(source_path) if source_path is not None and str(source_path) != "-" else None
+    )
+    if image_source is not None and not untrusted:
+        default_image_path = image_source.parent.resolve()
         if not default_image_path in [Path(x).resolve() for x in image_paths]:
             image_paths.append(default_image_path)
 
@@ -163,9 +173,10 @@ def parse(
     connection_sets = []
     # actual harness
     harness = Harness(
-        metadata=Metadata(**yaml_data.get("metadata", {})),
-        options=Options(**yaml_data.get("options", {})),
-        tweak=Tweak(**yaml_data.get("tweak", {})),
+        # `or {}`: an empty section (`metadata:` with no value) is None.
+        metadata=Metadata(**(yaml_data.get("metadata") or {})),
+        options=Options(**(yaml_data.get("options") or {})),
+        tweak=Tweak(**(yaml_data.get("tweak") or {})),
         source_path=source_path,
         untrusted=untrusted,
     )
@@ -266,6 +277,9 @@ def parse(
         expected_type = alternating_types[1 - alternating_types.index(expected_type)]
 
     for connection_set in connection_sets:
+        # The steps below rewrite the set in place. A YAML alias (*name)
+        # makes several sets share one list, so work on a private copy.
+        connection_set = copy.deepcopy(connection_set)
         # figure out number of parallel connections within this set
         connectioncount = []
         for entry in connection_set:
@@ -439,9 +453,10 @@ def parse(
             designators_and_templates[template_name] = template_name
             auto_loop_connectors.append(template_name)
     if auto_loop_connectors:
-        print(
+        # stderr, not stdout: stdout may carry the rendered output (-O -)
+        sys.stderr.write(
             "Info: auto-instantiating loop-only connector(s) not referenced"
-            " in any connection set: " + ", ".join(auto_loop_connectors)
+            " in any connection set: " + ", ".join(auto_loop_connectors) + "\n"
         )
 
     # warn about unused templates
@@ -459,11 +474,14 @@ def parse(
 
     # harness population completed =============================================
 
-    if "additional_bom_items" in yaml_data:
-        for line in yaml_data["additional_bom_items"]:
-            harness.add_bom_item(line)
+    for line in yaml_data.get("additional_bom_items") or []:
+        harness.add_bom_item(line)
 
-    yaml_source_for_png = yaml_str if embed_yaml else None
+    # Only build the YAML text for the PNG chunk when a PNG is produced.
+    wants_png = "png" in (output_formats or ()) or "png" in return_types
+    yaml_source_for_png = (
+        _yaml_source(inp, yaml_str) if embed_yaml and wants_png else None
+    )
     if output_formats:
         if write_to_stdout:
             if len(output_formats) != 1:
@@ -490,14 +508,12 @@ def parse(
 
     if return_types:
         returns = []
-        if isinstance(return_types, str):  # only one return type speficied
-            return_types = [return_types]
-
-        return_types = [t.lower() for t in return_types]
-
         for rt in return_types:
             if rt == "png":
-                returns.append(harness.png)
+                # Same bytes as file/stdout output, YAML chunk included.
+                returns.append(
+                    harness._render(("png",), yaml_source=yaml_source_for_png)["png"]
+                )
             if rt == "svg":
                 returns.append(harness.svg)
             if rt == "harness":
@@ -532,11 +548,17 @@ def _get_yaml_data_and_path(
                 f"Input is larger than the limit of {UNTRUSTED_MAX_INPUT_BYTES} bytes"
             )
         return yaml.safe_load(inp), None, inp
-    if not isinstance(inp, Dict):  # received a str or a Path
+    if isinstance(inp, Path):  # always a file; never fall back to YAML text
+        yaml_path = inp.expanduser().resolve(strict=True)
+        yaml_str = _read_source(yaml_path)
+        return yaml.safe_load(yaml_str), yaml_path, yaml_str
+    if not isinstance(inp, Dict):  # received a str
         try:
             yaml_path = Path(inp).expanduser().resolve(strict=True)
             # if no FileNotFoundError exception happens, get file contents
-            yaml_str = file_read_text(yaml_path)
+            yaml_str = _read_source(yaml_path)
+        except UnicodeDecodeError:
+            raise  # a real file that is not UTF-8 — not a YAML string
         except (FileNotFoundError, OSError, ValueError) as e:
             # if inp is a long YAML string, Pathlib will normally raise
             # FileNotFoundError or OSError(errno = ENAMETOOLONG) when
@@ -557,14 +579,41 @@ def _get_yaml_data_and_path(
             yaml_path = None
         yaml_data = yaml.safe_load(yaml_str)
     else:
-        # received a Dict — serialize back to YAML so the caller has a
-        # text form for round-trip embedding into PNG output, and
-        # deep-copy so the parsing pipeline's in-place expansion of
-        # the connections section doesn't leak back to the caller.
+        # received a Dict — deep-copy so the parsing pipeline's in-place
+        # changes don't leak back to the caller. The YAML text for PNG
+        # embedding is built later, only if a PNG is produced.
         yaml_data = copy.deepcopy(inp)
         yaml_path = None
-        yaml_str = yaml.safe_dump(inp, sort_keys=False, allow_unicode=True)
+        yaml_str = None
     return yaml_data, yaml_path, yaml_str
+
+
+def _read_source(path: Path) -> str:
+    """Return the YAML text of ``path``: the file itself, or the YAML
+    embedded in a PNG rendered by WireViz."""
+    if path.suffix.lower() == ".png":
+        from wireviz.Harness import read_yaml_from_png
+
+        embedded = read_yaml_from_png(path)
+        if embedded is None:
+            raise ValueError(f"{path} has no embedded WireViz YAML")
+        return embedded
+    return file_read_text(path)
+
+
+def _yaml_source(inp: Any, yaml_str: Optional[str]) -> Optional[str]:
+    """Return the YAML text to embed in a PNG, or None if a dict input
+    cannot be represented as YAML (for example, it holds Path objects)."""
+    if yaml_str is not None:
+        return yaml_str
+    try:
+        return yaml.safe_dump(inp, sort_keys=False, allow_unicode=True)
+    except yaml.YAMLError as exc:
+        sys.stderr.write(
+            f"Warning: input cannot be stored as YAML in the PNG ({exc}); "
+            "the PNG has no embedded source\n"
+        )
+        return None
 
 
 def _get_output_dir(input_file: Path, default_output_dir: Path) -> Path:

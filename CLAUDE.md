@@ -17,7 +17,7 @@ WireViz has both an **automated pytest suite** (`tests/`) and a separate **examp
 pip install -e .
 pip install pytest
 
-# Run the unit / integration test suite (~134 tests, ~5s)
+# Run the unit / integration test suite (~200 tests, ~7s)
 pytest
 
 # Run a single test file or test
@@ -55,7 +55,7 @@ cd src/wireviz && python build_examples.py compare -g examples tutorial demos
 
 GraphViz must be installed as a system dep (`dot -V`). Code is formatted with `black` + `isort` (`isort` profile is `black`, configured in `pyproject.toml`).
 
-CI (`.github/workflows/`) runs both `pytest` (the `Tests` workflow) and `build_examples.py` (the `Create Examples` workflow) across Python 3.7–3.12. Both must pass for a PR to be considered green.
+CI (`.github/workflows/`) runs both `pytest` (the `Tests` workflow) and `build_examples.py` (the `Create Examples` workflow) across Python 3.9–3.14. Both must pass for a PR to be considered green.
 
 ## Test suite layout (`tests/`)
 
@@ -68,6 +68,7 @@ CI (`.github/workflows/`) runs both `pytest` (the `Tests` workflow) and `build_e
 - **`tests/test_bom.py`** — BOM aggregation: identical-component dedup, ignore_in_bom, additional_bom_items, bundle category, part-number columns.
 - **`tests/test_regressions.py`** — **one test per upstream-PR port + every gemini review fix.** This is where every bug we ported a fix for gets pinned down so it can never silently regress. If you change behavior touched by any of those PRs, expect tests here to fail and update them deliberately.
 - **`tests/test_round_trip.py`** — PNG embed/extract, stdin→stdout pipelines, dict-input no-mutation contract.
+- **`tests/test_security.py`** — one test per finding of the October 2026 security audit (C1, C2, H1-H3, M1-M3, L1): always-on limits plus every `untrusted=True` rule. The `test_audit_*` tests in `test_regressions.py` pin the bugs from the same audit.
 
 `tests/conftest.py` provides shared fixtures (paths to small targeted YAMLs in `tests/fixtures/`). The fixture YAMLs are deliberately separate from the gallery YAMLs in `examples/` so tests aren't coupled to visual gallery changes.
 
@@ -105,6 +106,17 @@ The pipeline is **YAML → Harness object graph → GraphViz `.gv` → rendered 
 - **The `tweak` section** (`DataClasses.Tweak`) lets users override or append raw GraphViz attributes on the generated `.gv`. It runs after normal emission — keep it that way; don't bake tweak handling into the model layer.
 - **Backwards-compat shims**: `OLD_CONNECTOR_ATTR` in `Harness.py` maps deprecated keys (`pinout`, `pinnumbers`, `autogenerate`) to friendly errors. Add new deprecations there rather than silently accepting old keys.
 - **Generated artifacts (`*.gv`, `*.svg`, `*.png`, `*.html`, `*.bom.tsv` under `examples/`, `tutorial/`) are checked into git.** Don't include incidental rebuilds in PRs — the project policy (per `CONTRIBUTING.md`) is that maintainers rebuild on merge. Use `build_examples.py restore` before committing.
+
+## Untrusted input (load-bearing)
+
+`wireviz-gui` renders YAML sent from a browser, so this library must be safe for input its caller did not write. Design: `docs/plans/2026-10-02-october-2026-audit.md`. The contract:
+
+- **Graphviz does not escape everything.** `options.fontname`, `<font face>` in hypertext, HTML-label `href` and `tweak` text reach the SVG raw. Never assume Graphviz output is well-formed or script-free.
+- **Always on, for every caller** (`wv_safety.py`): `embed_svg_images` reads only the files in `Harness._declared_images()` (the resolved `image.src` paths) — never widen this to "any `<image>` in the SVG", that is an arbitrary local file read. `fontname` is validated. `expand()` rejects non-scalar entries (YAML alias bombs) and ranges over `MAX_EXPAND`; `pincount`/`wirecount` share the cap. PNG YAML embed/read parses raw chunks and never decodes pixels.
+- **`parse(..., untrusted=True)`** sets `Harness.untrusted`, and `Harness._render` honors it (the sidecar calls `_render` directly). Untrusted: a `str` input is always YAML text (never a path); 1 MB cap; `image.src` relative and inside `image_paths`, ≤ 50 MP; `metadata.template.name` a bare name; `tweak` refused; SVG rebuilt by `sanitize_svg`; HTML values through `sanitize_html_fragment`; Graphviz via subprocess with a timeout (`Harness._pipe`).
+- New output paths that put user text into SVG or HTML must go through the same sanitizers when `untrusted` is set, and get a test in `tests/test_security.py`.
+- `parse()` never mutates its arguments: `image_paths` is copied, dict input is deep-copied, each connection set is deep-copied before expansion.
+- `options.output_dpi` defaults to `None`. Graphviz's `dpi` also scales SVG/PDF by dpi/72, so a non-None default changes every vector output.
 
 ## Contribution conventions
 

@@ -1,6 +1,6 @@
 # Change Log
 
-## [Unreleased]
+## [1.1.0] (2026-10-02)
 
 Fixes for open issues in the original [wireviz/WireViz](https://github.com/wireviz/WireViz) repository. Triage: [docs/plans/2026-10-02-upstream-issue-triage.md](plans/2026-10-02-upstream-issue-triage.md).
 

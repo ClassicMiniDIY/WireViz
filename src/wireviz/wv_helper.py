@@ -7,6 +7,11 @@ from typing import Dict, List
 
 from wireviz.wv_safety import MAX_EXPAND
 
+# Conservative equivalents (see upstream #282): each AWG value has no more
+# copper than its metric size, and each metric size is the smallest
+# standard size with at least as much copper as its AWG value. Common
+# charts pair 0.5 mm2 with 20 AWG, but 20 AWG (0.518 mm2) holds more
+# copper than 0.5 mm2. Keep this property when editing the table.
 awg_equiv_table = {
     "0.09": "28",
     "0.14": "26",

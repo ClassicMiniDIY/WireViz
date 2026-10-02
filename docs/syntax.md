@@ -107,7 +107,12 @@ tweak:  # optional tweaking of .gv output
                           # <str>            custom units and formats are allowed
                           #                  but unavailable for auto-conversion
   show_equiv: <bool>      # defaults to false; can auto-convert between mm2 and AWG
-                          # and display the result when set to true
+                          # and display the result when set to true.
+                          # The equivalent never overstates the copper:
+                          # mm2 -> AWG shows an AWG size with no more copper
+                          # than the metric wire (0.5 mm2 -> 21 AWG), and
+                          # AWG -> mm2 shows the smallest standard metric size
+                          # with at least as much (20 AWG -> 0.75 mm2).
   length: <int/float>[ <unit>]  # <int/float> is assumed to be in meters unless <unit> is specified
                                 # e.g. length: 2.5 -> assumed to be 2.5 m
                                 # or   length: 2.5 ft -> "ft" is used as the unit

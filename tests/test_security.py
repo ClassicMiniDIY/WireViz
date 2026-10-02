@@ -578,3 +578,36 @@ connections: [[X1], [X2]]
             src, return_types="svg", image_paths=[tmp_path], untrusted=untrusted
         )
         assert svg.count("data:image/png;base64,") == 2
+
+
+def test_review_b2_image_scale_cannot_carry_markup(tmp_path: Path):
+    """image.scale was written raw into the generated <img> tag, which
+    check_dot_images removes as a whole: markup in scale hid a second
+    <img> that Graphviz rasterized into PNG output."""
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    src = """
+connectors:
+  X1:
+    pincount: 1
+    image:
+      src: pic.png
+      scale: 'true" src="/etc/hosts"/></td></tr><tr><td><img scale="true'
+connections: [[X1]]
+"""
+    with pytest.raises(ValueError, match="image.scale must be one of"):
+        parse(src, return_types="png", image_paths=[tmp_path], untrusted=True)
+
+
+@pytest.mark.parametrize(
+    "scale, expected", [(True, "true"), ("false", "false"), ("Both", "both")]
+)
+def test_review_b2_valid_scales(tmp_path: Path, scale, expected):
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    data = {
+        "connectors": {
+            "X1": {"pincount": 1, "image": {"src": "pic.png", "scale": scale}}
+        },
+        "connections": [["X1"]],
+    }
+    h = parse(data, return_types="harness", image_paths=[tmp_path])
+    assert h.connectors["X1"].image.scale == expected

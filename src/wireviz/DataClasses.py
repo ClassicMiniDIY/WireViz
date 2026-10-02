@@ -25,6 +25,7 @@ CableMultiplier = (
     PlainText  # = Literal['wirecount', 'terminations', 'length', 'total_length']
 )
 ImageScale = PlainText  # = Literal['false', 'true', 'width', 'height', 'both']
+_IMAGE_SCALES = {"false", "true", "width", "height", "both"}
 
 # Type combinations
 Pin = Union[int, PlainText]  # Pin identifier
@@ -130,6 +131,15 @@ class Image:
 
     def __post_init__(self):
         _coerce_bools(self)
+        # scale goes into the generated <img> tag; only Graphviz's values
+        # are allowed, so it can never carry markup.
+        if self.scale is not None:
+            self.scale = str(yaml11_bool(self.scale)).lower()
+            if self.scale not in _IMAGE_SCALES:
+                raise ValueError(
+                    f"image.scale must be one of {', '.join(sorted(_IMAGE_SCALES))}, "
+                    f"not {self.scale!r}"
+                )
         if self.fixedsize is None:
             # Default True if any dimension specified unless self.scale also is specified.
             self.fixedsize = (self.width or self.height) and self.scale is None

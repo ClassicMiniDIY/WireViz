@@ -123,9 +123,26 @@ ET.register_namespace("xlink", _XLINK_NS)
 # Every element Graphviz's SVG renderer emits. Anything else
 # (script, foreignObject, animate, set, iframe, ...) is removed.
 _SVG_ELEMENTS = {
-    "svg", "g", "title", "desc", "a", "text", "tspan", "polygon",
-    "polyline", "path", "ellipse", "circle", "rect", "line", "image",
-    "defs", "linearGradient", "radialGradient", "stop", "clipPath",
+    "svg",
+    "g",
+    "title",
+    "desc",
+    "a",
+    "text",
+    "tspan",
+    "polygon",
+    "polyline",
+    "path",
+    "ellipse",
+    "circle",
+    "rect",
+    "line",
+    "image",
+    "defs",
+    "linearGradient",
+    "radialGradient",
+    "stop",
+    "clipPath",
 }
 _HREF_ATTRS = {"href", f"{{{_XLINK_NS}}}href"}
 

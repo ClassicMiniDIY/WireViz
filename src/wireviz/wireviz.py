@@ -14,7 +14,6 @@ if __name__ == "__main__":
 
 from wireviz.DataClasses import Metadata, Options, Tweak
 from wireviz.Harness import Harness
-from wireviz.wv_safety import UNTRUSTED_MAX_INPUT_BYTES, check_untrusted_image
 from wireviz.wv_helper import (
     expand,
     file_read_text,
@@ -22,6 +21,7 @@ from wireviz.wv_helper import (
     is_arrow,
     smart_file_resolve,
 )
+from wireviz.wv_safety import UNTRUSTED_MAX_INPUT_BYTES, check_untrusted_image
 
 from . import APP_NAME
 
@@ -159,7 +159,9 @@ def parse(
     # Relative image paths resolve against the YAML file's directory: the
     # input file itself, or source_path for str/dict input.
     image_source = yaml_file or (
-        Path(source_path) if source_path is not None and str(source_path) != "-" else None
+        Path(source_path)
+        if source_path is not None and str(source_path) != "-"
+        else None
     )
     if image_source is not None and not untrusted:
         default_image_path = image_source.parent.resolve()

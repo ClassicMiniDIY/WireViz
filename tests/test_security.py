@@ -68,8 +68,8 @@ def test_c1_font_face_injection_does_not_embed_local_file(secret_file: Path, cap
     """C1. A ``<font face>`` in any hypertext field reaches the SVG
     unescaped. The injected ``<image>`` must not be inlined."""
     face = (
-        f'a&quot;/&gt;&lt;image xlink:href=&quot;{secret_file}&quot; '
-        f'x=&quot;0&quot;/&gt;&lt;text b=&quot;'
+        f"a&quot;/&gt;&lt;image xlink:href=&quot;{secret_file}&quot; "
+        f"x=&quot;0&quot;/&gt;&lt;text b=&quot;"
     )
     src = f"""
 connectors:
@@ -162,17 +162,13 @@ def test_m1_alias_bomb_fails_fast():
     for i, name in enumerate("bcdefghij"):
         prev = levels[-1].split("&")[1].split(" ")[0]
         levels.append(f"{name}: &{name} [{', '.join(['*' + prev] * 9)}]")
-    src = (
-        "bomb:\n"
-        + "\n".join("  " + line for line in levels)
-        + """
+    src = "bomb:\n" + "\n".join("  " + line for line in levels) + """
 connectors: {X1: {pincount: 2}}
 cables: {W1: {wirecount: 1}}
 connections:
   - - X1: [*j]
     - W1: [1]
 """
-    )
     start = time.monotonic()
     with pytest.raises(Exception):
         parse(src, return_types="harness")
@@ -212,9 +208,8 @@ def test_m2_png_yaml_read_does_not_decode_pixels():
 
 def test_m2_png_yaml_zlib_bomb_rejected():
     """M2. A compressed iTXt that inflates past the limit is refused."""
-    data = (
-        b"wireviz:yaml\x00\x01\x00\x00\x00"
-        + zlib.compress(b"a" * (17 * 1024 * 1024))
+    data = b"wireviz:yaml\x00\x01\x00\x00\x00" + zlib.compress(
+        b"a" * (17 * 1024 * 1024)
     )
     png = _png(1, 1, [(b"iTXt", data)])
     with pytest.raises(ValueError, match="larger than"):
@@ -257,8 +252,10 @@ def test_l1_image_paths_not_mutated(tmp_path: Path, minimal_yaml: Path):
 def test_h3_untrusted_str_is_never_a_path(tmp_path: Path):
     """H3. A request body that names a server file must not read it."""
     f = tmp_path / "server-only.yml"
-    f.write_text(f"connectors: {{X1: {{pincount: 1, notes: {SECRET}}}}}\n"
-                 "connections: [[X1]]\n")
+    f.write_text(
+        f"connectors: {{X1: {{pincount: 1, notes: {SECRET}}}}}\n"
+        "connections: [[X1]]\n"
+    )
     with pytest.raises(TypeError) as exc:
         parse(str(f), return_types="harness", untrusted=True)
     assert SECRET not in str(exc.value)
@@ -294,22 +291,34 @@ def test_h2_untrusted_image_traversal_rejected(tmp_path: Path):
     root.mkdir()
     (tmp_path / "outside.png").write_bytes(TRS.read_bytes())
     with pytest.raises(ValueError, match="not found"):
-        parse(_image_yaml("../outside.png"), return_types="svg",
-              image_paths=[root], untrusted=True)
+        parse(
+            _image_yaml("../outside.png"),
+            return_types="svg",
+            image_paths=[root],
+            untrusted=True,
+        )
 
 
 def test_h2_untrusted_image_inside_root_is_embedded(tmp_path: Path):
     (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
-    svg = parse(_image_yaml("pic.png"), return_types="svg",
-                image_paths=[tmp_path], untrusted=True)
+    svg = parse(
+        _image_yaml("pic.png"),
+        return_types="svg",
+        image_paths=[tmp_path],
+        untrusted=True,
+    )
     assert "data:image/png;base64," in svg
 
 
 def test_untrusted_image_pixel_cap(tmp_path: Path):
     (tmp_path / "huge.png").write_bytes(_png(20000, 20000))
     with pytest.raises(ValueError, match="pixels"):
-        parse(_image_yaml("huge.png"), return_types="svg",
-              image_paths=[tmp_path], untrusted=True)
+        parse(
+            _image_yaml("huge.png"),
+            return_types="svg",
+            image_paths=[tmp_path],
+            untrusted=True,
+        )
 
 
 @pytest.mark.parametrize("name", ["../../etc/passwd", "/tmp/private", "a.b"])
@@ -370,7 +379,7 @@ def test_c2_sanitize_svg_allowlist():
         '<a xlink:href="https://example.com"><text>ok</text></a>'
         '<image xlink:href="/etc/passwd"/>'
         '<image xlink:href="data:image/png;base64,AAAA"/>'
-        '<foreignObject><div/></foreignObject>'
+        "<foreignObject><div/></foreignObject>"
         '<animate attributeName="href" to="javascript:alert(1)"/>'
         "</g></svg>"
     )
@@ -437,6 +446,7 @@ def test_m1_untrusted_render_timeout(monkeypatch, minimal_yaml: Path):
 def test_untrusted_gallery_example_renders():
     """Untrusted mode must still render ordinary harnesses."""
     f = EXAMPLES / "demo01.yml"
-    svg = parse(f.read_text(), return_types="svg", image_paths=[f.parent],
-                untrusted=True)
+    svg = parse(
+        f.read_text(), return_types="svg", image_paths=[f.parent], untrusted=True
+    )
     assert svg.startswith("<?xml") and "<svg" in svg

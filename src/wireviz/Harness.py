@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Dict, List, Optional, Set, Tuple, Union
 
 from graphviz import Graph
+
 from wireviz import APP_NAME, APP_URL, __version__, wv_colors
 from wireviz.DataClasses import (
     Cable,
@@ -146,7 +147,10 @@ def _embed_yaml_in_png(png_bytes: bytes, yaml_source: str) -> bytes:
     """
     out = [_PNG_SIGNATURE]
     for ctype, data, raw in _png_chunks(png_bytes):
-        if ctype == b"iTXt" and data.split(b"\x00", 1)[0] == PNG_YAML_CHUNK_KEY.encode():
+        if (
+            ctype == b"iTXt"
+            and data.split(b"\x00", 1)[0] == PNG_YAML_CHUNK_KEY.encode()
+        ):
             continue  # we're about to write a fresh one
         if ctype == b"IEND":
             out.append(_itxt_chunk(PNG_YAML_CHUNK_KEY, yaml_source))
@@ -170,7 +174,9 @@ def read_yaml_from_png(png: Union[str, Path, BinaryIO]) -> Optional[str]:
 
 
 # A DOT ID that needs no quotes: an identifier or a numeral.
-_DOT_PLAIN_ID = re.compile(r"^([A-Za-z_\x80-\uffff][\w\x80-\uffff]*|-?(\.\d+|\d+(\.\d*)?))$")
+_DOT_PLAIN_ID = re.compile(
+    r"^([A-Za-z_\x80-\uffff][\w\x80-\uffff]*|-?(\.\d+|\d+(\.\d*)?))$"
+)
 
 
 def _dot_attr_value(value: str) -> str:

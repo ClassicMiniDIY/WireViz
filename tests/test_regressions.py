@@ -22,7 +22,6 @@ from wireviz.wv_cli import wireviz as cli
 from wireviz.wv_colors import get_color_hex
 from wireviz.wv_html import _latest_revision
 
-
 # ===========================================================================
 # Bug fixes from upstream PR #1 (4 fixes bundled)
 # ===========================================================================
@@ -235,11 +234,15 @@ def test_pr379_default_dpi_omitted(workdir: Path, minimal_yaml: Path):
     gv = (workdir / "default.gv").read_text()
     assert "dpi=" not in gv
     svg_96 = parse(
-        minimal_yaml.read_text().replace("connectors:", "options: {output_dpi: 96}\nconnectors:", 1),
+        minimal_yaml.read_text().replace(
+            "connectors:", "options: {output_dpi: 96}\nconnectors:", 1
+        ),
         return_types="svg",
     )
     width = lambda svg: float(re.search(r'<svg width="([\d.]+)pt"', svg)[1])
-    assert width(svg_96) == pytest.approx(width((workdir / "default.svg").read_text()) * 96 / 72, rel=0.02)
+    assert width(svg_96) == pytest.approx(
+        width((workdir / "default.svg").read_text()) * 96 / 72, rel=0.02
+    )
 
 
 # ===========================================================================
@@ -280,8 +283,9 @@ def test_pr234_round_trip_via_png(workdir: Path, minimal_yaml: Path):
 def test_pr234_review_im_info_preserved_through_embed(workdir: Path):
     """PR #5 review fix. Re-encoding the PNG to add the iTXt chunk
     doesn't lose existing metadata chunks (DPI etc)."""
-    from wireviz.Harness import _embed_yaml_in_png
     import io
+
+    from wireviz.Harness import _embed_yaml_in_png
 
     # Make a PNG with a DPI hint
     buf = io.BytesIO()
@@ -448,8 +452,10 @@ def test_pr367_review_pdf_docstring_says_diagram_only():
 def test_pr10_review_data_uri_no_leading_space():
     """PR #10 review fix. RFC 2397 says no whitespace after the
     ``base64,`` separator in data URIs."""
+    import os
+    import tempfile
+
     from wireviz.svgembed import data_URI_base64
-    import tempfile, os
 
     # Write a tiny PNG to disk and base64-URI it
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
@@ -564,9 +570,7 @@ def test_audit_5_output_dir_is_created(tmp_path: Path, minimal_yaml: Path):
 def test_audit_7_source_path_resolves_images_for_str_input(tmp_path: Path):
     """[7] source_path supplies the image directory for str/dict input."""
     a, _ = _two_dirs_with_logo(tmp_path)
-    svg = parse(
-        (a / "h.yml").read_text(), return_types="svg", source_path=a / "h.yml"
-    )
+    svg = parse((a / "h.yml").read_text(), return_types="svg", source_path=a / "h.yml")
     assert "data:image/png;base64," in svg
 
 
@@ -574,7 +578,9 @@ def test_audit_8_non_utf8_file_raises(tmp_path: Path):
     """[8] A real file that is not UTF-8 raises instead of being parsed
     as a YAML string made of its path."""
     f = tmp_path / "latin1.yml"
-    f.write_bytes("connectors: {X1: {pincount: 1, notes: '25\xb0C'}}\n".encode("latin-1"))
+    f.write_bytes(
+        "connectors: {X1: {pincount: 1, notes: '25\xb0C'}}\n".encode("latin-1")
+    )
     with pytest.raises(UnicodeDecodeError):
         parse(str(f), return_types="harness")
 
@@ -637,9 +643,13 @@ def test_audit_png_return_matches_file_output(minimal_yaml: Path):
 # ===========================================================================
 
 
-def test_audit_9_stdin_with_output_name_writes_files(runner, workdir: Path, minimal_yaml: Path):
+def test_audit_9_stdin_with_output_name_writes_files(
+    runner, workdir: Path, minimal_yaml: Path
+):
     """[9] `cat x.yml | wireviz -f s -O foo -` writes foo.svg."""
-    result = runner.invoke(cli, ["-f", "s", "-O", "foo", "-"], input=minimal_yaml.read_text())
+    result = runner.invoke(
+        cli, ["-f", "s", "-O", "foo", "-"], input=minimal_yaml.read_text()
+    )
     assert result.exit_code == 0, result.stderr
     assert (workdir / "foo.svg").exists()
     assert "<svg" not in result.stdout
@@ -700,7 +710,9 @@ def test_audit_14_show_equiv_without_gauge():
     assert "<svg" in parse(src, return_types="svg")
 
 
-@pytest.mark.parametrize("gauge, expected", [(1.0, "18 AWG"), ("1.0 mm2", "18 AWG"), (0.5, "21 AWG")])
+@pytest.mark.parametrize(
+    "gauge, expected", [(1.0, "18 AWG"), ("1.0 mm2", "18 AWG"), (0.5, "21 AWG")]
+)
 def test_audit_14_float_gauge_lookup(gauge, expected):
     """[14] gauge 1.0 used to show "(Unknown AWG)"."""
     src = (

@@ -14,7 +14,6 @@ import pytest
 from wireviz.Harness import read_yaml_from_png
 from wireviz.wv_cli import wireviz as cli
 
-
 # Tests in this file use the ``cli_runner`` fixture from conftest.py
 # rather than instantiating CliRunner directly, so the Click 8.0-8.2
 # vs 8.3+ ``mix_stderr`` API drift is handled in one place.

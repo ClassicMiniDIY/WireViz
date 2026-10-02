@@ -9,13 +9,12 @@ from wireviz import APP_NAME, APP_URL, __version__, wv_colors
 from wireviz.DataClasses import Metadata, Options
 from wireviz.svgembed import data_URI_base64
 from wireviz.wv_gv_html import html_line_breaks
-from wireviz.wv_safety import check_template_name, sanitize_html_fragment
 from wireviz.wv_helper import (
     file_read_text,
     flatten2d,
     smart_file_resolve,
 )
-
+from wireviz.wv_safety import check_template_name, sanitize_html_fragment
 
 def _latest_revision(metadata: Metadata) -> str:
     """Return the key of the most recently added entry in
@@ -93,7 +92,9 @@ def generate_html_output(
     bom_header_html = "  <tr>\n"
     for item in bom[0]:
         th_class = f"bom_col_{item.lower()}"
-        bom_header_html = f'{bom_header_html}    <th class="{th_class}">{clean(item)}</th>\n'
+        bom_header_html = (
+            f'{bom_header_html}    <th class="{th_class}">{clean(item)}</th>\n'
+        )
     bom_header_html = f"{bom_header_html}  </tr>\n"
 
     # generate BOM contents
@@ -168,9 +169,9 @@ def generate_html_output(
                             str(category)
                         )
                         for entry_key, entry_value in entry.items():
-                            replacements[
-                                f"<!-- %{item}_{index+1}_{entry_key}% -->"
-                            ] = clean(html_line_breaks(str(entry_value)))
+                            replacements[f"<!-- %{item}_{index+1}_{entry_key}% -->"] = (
+                                clean(html_line_breaks(str(entry_value)))
+                            )
                     elif isinstance(entry, (str, int, float)):
                         pass  # TODO?: replacements[f"<!-- %{item}_{category}% -->"] = html_line_breaks(str(entry))
 

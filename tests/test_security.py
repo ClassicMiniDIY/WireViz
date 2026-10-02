@@ -578,3 +578,98 @@ connections: [[X1], [X2]]
             src, return_types="svg", image_paths=[tmp_path], untrusted=untrusted
         )
         assert svg.count("data:image/png;base64,") == 2
+
+
+def test_review_b2_image_scale_cannot_carry_markup(tmp_path: Path):
+    """image.scale was written raw into the generated <img> tag, which
+    check_dot_images removes as a whole: markup in scale hid a second
+    <img> that Graphviz rasterized into PNG output."""
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    src = """
+connectors:
+  X1:
+    pincount: 1
+    image:
+      src: pic.png
+      scale: 'true" src="/etc/hosts"/></td></tr><tr><td><img scale="true'
+connections: [[X1]]
+"""
+    with pytest.raises(ValueError, match="image.scale must be one of"):
+        parse(src, return_types="png", image_paths=[tmp_path], untrusted=True)
+
+
+@pytest.mark.parametrize(
+    "scale, expected", [(True, "true"), ("false", "false"), ("Both", "both")]
+)
+def test_review_b2_valid_scales(tmp_path: Path, scale, expected):
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    data = {
+        "connectors": {
+            "X1": {"pincount": 1, "image": {"src": "pic.png", "scale": scale}}
+        },
+        "connections": [["X1"]],
+    }
+    h = parse(data, return_types="harness", image_paths=[tmp_path])
+    assert h.connectors["X1"].image.scale == expected
+
+
+# ===========================================================================
+# Batch B review: embedded and converted images
+# ===========================================================================
+
+
+def _image_bytes(fmt: str) -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), "red").save(buf, format=fmt)
+    return buf.getvalue()
+
+
+EPS = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\nshowpage\n"
+
+
+@pytest.mark.parametrize("payload", [EPS, None])
+def test_review_b1_data_uri_must_match_declared_type(payload):
+    """Pillow probes every decoder unless told the format: EPS bytes in a
+    data:image/png URI would run Ghostscript. Only the declared format
+    is accepted."""
+    payload = payload or _image_bytes("GIF")
+    uri = "data:image/png;base64," + base64.b64encode(payload).decode()
+    src = f"connectors:\n  X1: {{pincount: 1, image: '{uri}'}}\nconnections: [[X1]]\n"
+    with pytest.raises(ValueError, match="not a readable PNG image"):
+        parse(src, return_types="harness", untrusted=True)
+
+
+@pytest.mark.parametrize("payload", [EPS, None])
+def test_review_b1_webp_file_must_be_webp(tmp_path: Path, payload):
+    (tmp_path / "x.webp").write_bytes(payload or _image_bytes("PNG"))
+    src = "connectors:\n  X1: {pincount: 1, image: x.webp}\nconnections: [[X1]]\n"
+    with pytest.raises(ValueError, match="Image x.webp is not a"):
+        parse(src, return_types="harness", image_paths=[tmp_path], untrusted=True)
+
+
+def test_review_s1_repeated_data_uri_is_decoded_once(monkeypatch):
+    import wireviz.wv_images as wi
+
+    calls = []
+    real = wi._to_png
+    monkeypatch.setattr(wi, "_to_png", lambda *a: calls.append(1) or real(*a))
+    uri = "data:image/png;base64," + base64.b64encode(_image_bytes("PNG")).decode()
+    entries = "\n".join(f"  X{i}: *c" for i in range(2, 50))
+    src = (
+        f"connectors:\n  X1: &c {{pincount: 1, image: '{uri}'}}\n{entries}\n"
+        "connections: [[X1]]\n"
+    )
+    parse(src, return_types="harness", untrusted=True)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("title", ["ends with \\", "keeps \\N literally"])
+def test_review_s2_title_backslashes(title: str):
+    src = (
+        f"metadata: {{title: '{title}'}}\noptions: {{show_title: true}}\n"
+        "connectors: {X1: {pincount: 1}}\nconnections: [[X1]]\n"
+    )
+    svg = parse(src, return_types="svg")
+    assert title.split()[0] in svg

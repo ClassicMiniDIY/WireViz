@@ -85,7 +85,8 @@ epilog += ", ".join([f"{key} ({value.upper()})" for key, value in format_codes.i
     multiple=True,
     metavar="KEY",
     help="Drop an attribute from every connector and cable (e.g. image), "
-    "or from one (e.g. X1.image). Repeatable.",
+    "or from one (e.g. X1.image, where X1 is the key under connectors: or "
+    "cables:). Repeatable.",
 )
 @click.option(
     "-V",

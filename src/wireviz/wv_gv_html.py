@@ -70,7 +70,8 @@ def html_img_tag(image) -> str:
     """Return the exact ``<img>`` tag WireViz emits for ``image``.
     wv_safety.check_dot_images allows only these strings in untrusted mode."""
     src = escape(str(image.src), quote=True)  # paths may contain & < > "
-    return f'<img scale="{image.scale}" src="{src}"/>'
+    scale = escape(str(image.scale), quote=True)
+    return f'<img scale="{scale}" src="{src}"/>'
 
 
 def html_image(image):

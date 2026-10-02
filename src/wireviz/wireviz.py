@@ -207,6 +207,7 @@ def parse(
     # add items
     # parse YAML input file ====================================================
 
+    image_cache = {}  # image source -> materialized PNG, for this parse
     sections = ["connectors", "cables", "connections"]
     types = [dict, dict, list]
     for sec, ty in zip(sections, types):
@@ -235,7 +236,7 @@ def parse(
                             if is_data_uri(image_path):
                                 # embedded image: decode to a file (#188, #322)
                                 image["src"] = materialize_data_uri(
-                                    image_path, harness.temp_dir()
+                                    image_path, harness.temp_dir(), image_cache
                                 )
                             elif untrusted:
                                 image["src"] = check_untrusted_image(
@@ -249,7 +250,10 @@ def parse(
                             if str(image["src"]).lower().endswith(".webp"):
                                 # many Graphviz builds cannot load webp (#202)
                                 image["src"] = materialize_webp(
-                                    image["src"], harness.temp_dir()
+                                    image["src"],
+                                    image_path,
+                                    harness.temp_dir(),
+                                    image_cache,
                                 )
                         if sec == "connectors":
                             template_connectors[key] = attribs

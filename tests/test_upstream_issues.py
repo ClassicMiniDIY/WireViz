@@ -318,7 +318,7 @@ connectors:
     assert h.connectors["X1"].loops == [[1, 2], [3, 4]]
     assert h.connectors["X1"].loop_colors == ["RD", None]
     source = h.graph.source
-    assert "#000000:#ff0000:#ff0000:#ff0000:#000000" in source  # red loop
+    assert "#000000:#ff0000:#000000" in source  # red loop, as thick as a wire
     assert "#000000:#ffffff:#000000" in source  # default loop look kept
 
 
@@ -473,7 +473,7 @@ def test_issue188_issue322_base64_image(untrusted: bool):
     [
         ("data:text/html;base64,PGI+", "must look like"),
         ("data:image/png;base64,!!!!", "must look like"),
-        ("data:image/png;base64,AAAA", "not a readable image"),
+        ("data:image/png;base64,AAAA", "not a readable PNG image"),
     ],
 )
 def test_issue188_bad_data_uri(uri: str, message: str):

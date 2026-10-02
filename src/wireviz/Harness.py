@@ -59,6 +59,7 @@ from wireviz.wv_helper import (
     mm2_equiv,
     tuplelist2csv,
     tuplelist2tsv,
+    upper_first,
 )
 from wireviz.wv_html import generate_html_output
 from wireviz.wv_safety import UNTRUSTED_RENDER_TIMEOUT, check_dot_images, sanitize_svg
@@ -442,7 +443,11 @@ class Harness:
         if self.options.show_title and self.metadata.get("title"):
             # A plain-text graph label: graphviz quotes it (#460).
             graph_attrs.update(
-                label=nohtml(str(self.metadata["title"])), labelloc="t", fontsize="20"
+                # Backslashes doubled: DOT reads \N, \G and a trailing \
+                # in a label as escapes.
+                label=nohtml(str(self.metadata["title"]).replace("\\", "\\\\")),
+                labelloc="t",
+                fontsize="20",
             )
         dot.attr("graph", **graph_attrs)  # TODO: Add graph attribute: charset="utf-8",
         dot.attr(
@@ -456,6 +461,14 @@ class Harness:
             fontname=self.options.fontname,
         )
         dot.attr("edge", style="bold", fontname=self.options.fontname)
+
+        # determine if there are double- or triple-colored wires in the harness;
+        # if so, pad single-color wires and loops to make all wires of equal thickness
+        pad = any(
+            len(get_color_hex(colorstr)) > 1
+            for cable in self.cables.values()
+            for colorstr in cable.colors
+        )
 
         for connector in self.connectors.values():
             # If no wires connected (except maybe loop wires)?
@@ -562,7 +575,7 @@ class Harness:
                         color=":".join(
                             ["#000000"]
                             + (
-                                get_color_hex(loop_color, pad=True)
+                                get_color_hex(loop_color, pad=pad)
                                 if loop_color
                                 else ["#ffffff"]
                             )
@@ -586,14 +599,6 @@ class Harness:
                         (connector.name, f"p{pos_b}{s_b}", d_b),
                         label=" ",  # Work-around to avoid over-sized loops.
                     )
-
-        # determine if there are double- or triple-colored wires in the harness;
-        # if so, pad single-color wires to make all wires of equal thickness
-        pad = any(
-            len(get_color_hex(colorstr)) > 1
-            for cable in self.cables.values()
-            for colorstr in cable.colors
-        )
 
         for cable in self.cables.values():
             html = []
@@ -722,7 +727,7 @@ class Harness:
                 wirehtml.append("   <tr>")
                 wirehtml.append("    <td><!-- s_in --></td>")
                 wirehtml.append(
-                    f"    <td>{html_text(self.options.terminology.shield.capitalize())}</td>"
+                    f"    <td>{html_text(upper_first(self.options.terminology.shield))}</td>"
                 )
                 wirehtml.append("    <td><!-- s_out --></td>")
                 wirehtml.append("   </tr>")

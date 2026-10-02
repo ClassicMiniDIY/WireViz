@@ -107,7 +107,12 @@ tweak:  # optional tweaking of .gv output
                           # <str>            custom units and formats are allowed
                           #                  but unavailable for auto-conversion
   show_equiv: <bool>      # defaults to false; can auto-convert between mm2 and AWG
-                          # and display the result when set to true
+                          # and display the result when set to true.
+                          # The equivalent never overstates the copper:
+                          # mm2 -> AWG shows an AWG size with no more copper
+                          # than the metric wire (0.5 mm2 -> 21 AWG), and
+                          # AWG -> mm2 shows the smallest standard metric size
+                          # with at least as much (20 AWG -> 0.75 mm2).
   length: <int/float>[ <unit>]  # <int/float> is assumed to be in meters unless <unit> is specified
                                 # e.g. length: 2.5 -> assumed to be 2.5 m
                                 # or   length: 2.5 ft -> "ft" is used as the unit
@@ -388,7 +393,9 @@ See [HTML Output Templates](../src/wireviz/templates/) for how metadata entries 
   # 'GER'  : Uppercase short German color name
   color_mode: <str>            # Default = 'SHORT'
 
-  # Fontname to use in diagram and HTML output
+  # Fontname to use in diagram and HTML output.
+  # Allowed characters: letters, digits, space and , . : + - _
+  # (for example 'DejaVu Sans' or 'Helvetica:bold')
   fontname: <str>              # Default = 'arial'
 
   # If True, show only a BOM entry reference together with basic info
@@ -400,9 +407,10 @@ See [HTML Output Templates](../src/wireviz/templates/) for how metadata entries 
   template_separator: <str>    # Default = '.'
 
   # Graphviz dpi attribute (https://graphviz.org/docs/attrs/dpi/).
-  # Controls the resolution of raster (PNG) output and the size unit of
-  # vector (SVG) output.
-  output_dpi: <float>          # Default = 96.0
+  # Controls the resolution of raster (PNG) output. Graphviz also scales
+  # vector (SVG, PDF) output by dpi/72 when it is set. When omitted,
+  # PNG renders at 96 dpi and SVG/PDF at true size.
+  output_dpi: <float>          # Default = not set
 ```
 
 

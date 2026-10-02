@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import re
+from html import escape
 from typing import List, Optional, Union
 
 from wireviz.DataClasses import Color
@@ -64,13 +65,20 @@ def html_colorbar(color: Color) -> str:
     return html_bgcolor(color, ' width="4"') if color else None
 
 
+def html_img_tag(image) -> str:
+    """Return the exact ``<img>`` tag WireViz emits for ``image``.
+    wv_safety.check_dot_images allows only these strings in untrusted mode."""
+    src = escape(str(image.src), quote=True)  # paths may contain & < > "
+    return f'<img scale="{image.scale}" src="{src}"/>'
+
+
 def html_image(image):
     from wireviz.DataClasses import Image
 
     if not image:
         return None
     # The leading attributes belong to the preceeding tag. See where used below.
-    html = f'{html_size_attr(image)}><img scale="{image.scale}" src="{image.src}"/>'
+    html = f"{html_size_attr(image)}>{html_img_tag(image)}"
     if image.fixedsize:
         # Close the preceeding tag and enclose the image cell in a table without
         # borders to avoid narrow borders when the fixed width < the node width.

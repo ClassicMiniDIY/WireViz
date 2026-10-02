@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
 
 import base64
-import io
 import re
+import struct
+import subprocess
 import sys
+import zlib
 from collections import Counter
 from dataclasses import dataclass
 from itertools import zip_longest
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, BinaryIO, Dict, List, Optional, Set, Tuple, Union
 
 from graphviz import Graph
-from PIL import Image as PILImage
-from PIL.PngImagePlugin import PngInfo
+
 from wireviz import APP_NAME, APP_URL, __version__, wv_colors
 from wireviz.DataClasses import (
     Cable,
@@ -43,6 +44,7 @@ from wireviz.wv_gv_html import (
     html_caption,
     html_colorbar,
     html_image,
+    html_img_tag,
     html_line_breaks,
     nested_html_table,
     remove_links,
@@ -56,6 +58,7 @@ from wireviz.wv_helper import (
     tuplelist2tsv,
 )
 from wireviz.wv_html import generate_html_output
+from wireviz.wv_safety import UNTRUSTED_RENDER_TIMEOUT, check_dot_images, sanitize_svg
 
 OLD_CONNECTOR_ATTR = {
     "pinout": "was renamed to 'pinlabels' in v0.2",
@@ -69,44 +72,136 @@ OLD_CONNECTOR_ATTR = {
 PNG_YAML_CHUNK_KEY = "wireviz:yaml"
 
 
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# Upper bound for the decompressed YAML read back from a PNG. Real
+# harness sources are a few kB; the limit stops a zlib bomb.
+_MAX_PNG_YAML_BYTES = 16 * 1024 * 1024
+
+
+def _png_chunks(png_bytes: bytes):
+    """Yield ``(type, data, raw_chunk)`` for each chunk of a PNG file.
+
+    Works on the raw bytes, so no pixel data is decoded. A crafted PNG
+    with huge dimensions therefore costs nothing to inspect.
+    """
+    if not png_bytes.startswith(_PNG_SIGNATURE):
+        raise ValueError("Not a PNG file (bad signature)")
+    pos = len(_PNG_SIGNATURE)
+    while pos < len(png_bytes):
+        if pos + 8 > len(png_bytes):
+            raise ValueError("Truncated PNG chunk header")
+        (length,) = struct.unpack(">I", png_bytes[pos : pos + 4])
+        ctype = png_bytes[pos + 4 : pos + 8]
+        end = pos + 12 + length
+        if end > len(png_bytes):
+            raise ValueError("Truncated PNG chunk")
+        yield ctype, png_bytes[pos + 8 : pos + 8 + length], png_bytes[pos:end]
+        pos = end
+        if ctype == b"IEND":
+            return
+
+
+def _itxt_chunk(keyword: str, text: str) -> bytes:
+    """Return a complete, compressed iTXt chunk (length, type, data, CRC)."""
+    data = (
+        keyword.encode("latin-1")
+        + b"\x00"  # keyword terminator
+        + b"\x01\x00"  # compression flag = on, method = zlib
+        + b"\x00"  # empty language tag
+        + b"\x00"  # empty translated keyword
+        + zlib.compress(text.encode("utf-8"))
+    )
+    ctype = b"iTXt"
+    return (
+        struct.pack(">I", len(data))
+        + ctype
+        + data
+        + struct.pack(">I", zlib.crc32(ctype + data) & 0xFFFFFFFF)
+    )
+
+
+def _parse_itxt(data: bytes) -> Tuple[str, str]:
+    """Return ``(keyword, text)`` from the data of an iTXt chunk."""
+    try:
+        keyword, rest = data.split(b"\x00", 1)
+        compressed, method = rest[0], rest[1]
+        _language, rest = rest[2:].split(b"\x00", 1)
+        _translated, text = rest.split(b"\x00", 1)
+    except (ValueError, IndexError) as exc:
+        raise ValueError("Malformed iTXt chunk") from exc
+    if compressed:
+        if method != 0:
+            raise ValueError(f"Unknown iTXt compression method {method}")
+        inflater = zlib.decompressobj()
+        text = inflater.decompress(text, _MAX_PNG_YAML_BYTES)
+        if inflater.unconsumed_tail:
+            raise ValueError(
+                f"Embedded text is larger than {_MAX_PNG_YAML_BYTES} bytes"
+            )
+    return keyword.decode("latin-1"), text.decode("utf-8")
+
+
 def _embed_yaml_in_png(png_bytes: bytes, yaml_source: str) -> bytes:
-    """Re-encode PNG bytes with the YAML source stored in an iTXt chunk.
+    """Return the PNG with the YAML source stored in an iTXt chunk.
 
-    Pillow's PNG write path does not natively support adding a single
-    chunk to an existing file, so this decodes and re-encodes. To keep
-    the round-trip non-destructive, anything Pillow surfaced via
-    ``im.info`` (DPI, color profiles, existing text chunks) is carried
-    forward, and existing iTXt entries on the source image are merged
-    in alongside the new ``wireviz:yaml`` chunk.
+    The chunk is inserted just before ``IEND``; every other chunk is
+    copied byte for byte, so DPI, color profile and other text chunks
+    stay as they were. An existing ``wireviz:yaml`` chunk is replaced.
+    The image is not decoded, so the cost does not depend on its size.
     """
-    with PILImage.open(io.BytesIO(png_bytes)) as im:
-        im.load()
-        chunks = PngInfo()
-        # Preserve any existing iTXt chunks (e.g. dpi metadata or
-        # downstream-tool annotations) — Pillow surfaces them in im.text.
-        existing_text = getattr(im, "text", {}) or {}
-        for key, value in existing_text.items():
-            if key == PNG_YAML_CHUNK_KEY:
-                continue  # we're about to write a fresh one
-            chunks.add_itxt(key, value, zip=True)
-        chunks.add_itxt(PNG_YAML_CHUNK_KEY, yaml_source, zip=True)
-        out = io.BytesIO()
-        # ``**im.info`` carries forward DPI, color profile, gamma, etc.
-        # Filter the keys Pillow's PNG writer accepts to avoid TypeErrors
-        # from unrelated info entries.
-        png_save_keys = {"dpi", "gamma", "transparency", "icc_profile"}
-        save_kwargs = {k: v for k, v in im.info.items() if k in png_save_keys}
-        im.save(out, format="PNG", pnginfo=chunks, **save_kwargs)
-        return out.getvalue()
+    out = [_PNG_SIGNATURE]
+    for ctype, data, raw in _png_chunks(png_bytes):
+        if (
+            ctype == b"iTXt"
+            and data.split(b"\x00", 1)[0] == PNG_YAML_CHUNK_KEY.encode()
+        ):
+            continue  # we're about to write a fresh one
+        if ctype == b"IEND":
+            out.append(_itxt_chunk(PNG_YAML_CHUNK_KEY, yaml_source))
+        out.append(raw)
+    return b"".join(out)
 
 
-def read_yaml_from_png(png_path: Union[str, Path]) -> Optional[str]:
-    """Return the YAML source embedded in ``png_path`` by an earlier
-    WireViz render, or ``None`` if no ``wireviz:yaml`` chunk is present.
+def read_yaml_from_png(png: Union[str, Path, BinaryIO]) -> Optional[str]:
+    """Return the YAML source embedded in a PNG by an earlier WireViz
+    render, or ``None`` if no ``wireviz:yaml`` chunk is present.
+
+    ``png`` is a path or a binary file-like object. Only the chunk
+    structure is read; the image itself is never decoded.
     """
-    with PILImage.open(png_path) as im:
-        im.load()
-        return im.text.get(PNG_YAML_CHUNK_KEY) if hasattr(im, "text") else None
+    png_bytes = png.read() if hasattr(png, "read") else Path(png).read_bytes()
+    key = PNG_YAML_CHUNK_KEY.encode()
+    for ctype, data, _raw in _png_chunks(png_bytes):
+        if ctype == b"iTXt" and data.split(b"\x00", 1)[0] == key:
+            return _parse_itxt(data)[1]
+    return None
+
+
+# A DOT ID that needs no quotes: an identifier or a numeral.
+_DOT_PLAIN_ID = re.compile(
+    r"^([A-Za-z_\x80-\uffff][\w\x80-\uffff]*|-?(\.\d+|\d+(\.\d*)?))$"
+)
+
+
+# One complete DOT double-quoted string (inner quotes escaped).
+_DOT_QUOTED = re.compile(r'^"(?:[^"\\]|\\.)*"$', re.S)
+
+
+def _dot_attr_value(value: str) -> str:
+    """Return ``value`` ready for a DOT attribute: as-is when it is a
+    plain ID, a numeral, an already-quoted string or an HTML label;
+    otherwise quoted, with inner double quotes escaped."""
+    if _DOT_PLAIN_ID.match(value):
+        return value
+    if _DOT_QUOTED.match(value) or (
+        len(value) >= 2 and value[0] == "<" and value[-1] == ">"
+    ):
+        return value
+    # Keep backslash escapes (\N, \l) but never end on a lone backslash,
+    # which would escape the closing quote.
+    if (len(value) - len(value.rstrip("\\"))) % 2:
+        value += "\\"
+    return '"' + re.sub(r'(?<!\\)"', r'\\"', value) + '"'
 
 
 def check_old(node: str, old_attr: dict, args: dict) -> None:
@@ -122,6 +217,10 @@ class Harness:
     options: Options
     tweak: Tweak
     source_path: Path = None
+    # True when the YAML came from an untrusted source; see
+    # parse(untrusted=...). _render then sanitizes SVG and HTML output
+    # and runs Graphviz with a timeout.
+    untrusted: bool = False
 
     def __post_init__(self):
         self.connectors = {}
@@ -187,9 +286,32 @@ class Harness:
         ) or None
 
     def add_mate_pin(self, from_name, from_pin, to_name, to_pin, arrow_type) -> None:
+        # Pins may be given by label, as in cable connections (upstream #510).
+        from_pin = self._resolve_pin(from_name, from_pin)
+        to_pin = self._resolve_pin(to_name, to_pin)
         self.mates.append(MatePin(from_name, from_pin, to_name, to_pin, arrow_type))
         self.connectors[from_name].activate_pin(from_pin, Side.RIGHT)
         self.connectors[to_name].activate_pin(to_pin, Side.LEFT)
+
+    def _resolve_pin(self, name: str, pin):
+        """Return the pin number for ``pin`` on connector ``name``, where
+        ``pin`` is a pin number or a pin label."""
+        connector = self.connectors[name]
+        # check if provided name is ambiguous
+        if pin in connector.pins and pin in connector.pinlabels:
+            if connector.pins.index(pin) != connector.pinlabels.index(pin):
+                raise Exception(
+                    f"{name}:{pin} is defined both in pinlabels and pins, for different pins."
+                )
+            # TODO: Maybe issue a warning if present in both lists but referencing the same pin?
+        if pin in connector.pinlabels:
+            if connector.pinlabels.count(pin) > 1:
+                raise Exception(f"{name}:{pin} is defined more than once.")
+            index = connector.pinlabels.index(pin)
+            pin = connector.pins[index]  # map pin name to pin number
+        if not pin in connector.pins:
+            raise Exception(f"{name}:{pin} not found.")
+        return pin
 
     def add_mate_component(self, from_name, to_name, arrow_type) -> None:
         self.mates.append(MateComponent(from_name, to_name, arrow_type))
@@ -207,27 +329,10 @@ class Harness:
         to_pin: (int, str),
     ) -> None:
         # check from and to connectors
-        for name, pin in zip([from_name, to_name], [from_pin, to_pin]):
-            if name is not None and name in self.connectors:
-                connector = self.connectors[name]
-                # check if provided name is ambiguous
-                if pin in connector.pins and pin in connector.pinlabels:
-                    if connector.pins.index(pin) != connector.pinlabels.index(pin):
-                        raise Exception(
-                            f"{name}:{pin} is defined both in pinlabels and pins, for different pins."
-                        )
-                    # TODO: Maybe issue a warning if present in both lists but referencing the same pin?
-                if pin in connector.pinlabels:
-                    if connector.pinlabels.count(pin) > 1:
-                        raise Exception(f"{name}:{pin} is defined more than once.")
-                    index = connector.pinlabels.index(pin)
-                    pin = connector.pins[index]  # map pin name to pin number
-                    if name == from_name:
-                        from_pin = pin
-                    if name == to_name:
-                        to_pin = pin
-                if not pin in connector.pins:
-                    raise Exception(f"{name}:{pin} not found.")
+        if from_name is not None and from_name in self.connectors:
+            from_pin = self._resolve_pin(from_name, from_pin)
+        if to_name is not None and to_name in self.connectors:
+            to_pin = self._resolve_pin(to_name, to_pin)
 
         # check via cable
         if via_name in self.cables:
@@ -412,7 +517,8 @@ class Harness:
             html = []
 
             awg_fmt = ""
-            if cable.show_equiv:
+            # gauge_unit is None when no gauge is given (upstream #497/#498).
+            if cable.show_equiv and isinstance(cable.gauge_unit, str):
                 # Only convert units we actually know about, i.e. currently
                 # mm2 and awg --- other units _are_ technically allowed,
                 # and passed through as-is.
@@ -706,7 +812,9 @@ class Harness:
                         for attr, value in self.tweak.override[keyword].items():
                             if value is None:
                                 entry, n_subs = re.subn(
-                                    f'( +)?{attr}=("[^"]*"|[^] ]*)(?(1)| *)', "", entry
+                                    f'( +)?{re.escape(attr)}=("[^"]*"|[^] ]*)(?(1)| *)',
+                                    "",
+                                    entry,
                                 )
                                 if n_subs < 1:
                                     sys.stderr.write(
@@ -718,15 +826,19 @@ class Harness:
                                     )
                                 continue
 
-                            if len(value) == 0 or " " in value:
-                                value = value.replace('"', r"\"")
-                                value = f'"{value}"'
+                            value = _dot_attr_value(value)
+                            # Replacement functions, not strings: the value
+                            # is literal text (it may hold \N, \l, ...).
                             entry, n_subs = re.subn(
-                                f'{attr}=("[^"]*"|[^] ]*)', f"{attr}={value}", entry
+                                f'{re.escape(attr)}=("[^"]*"|[^] ]*)',
+                                lambda _m: f"{attr}={value}",
+                                entry,
                             )
                             if n_subs < 1:
                                 # If attr not found, then append it
-                                entry = re.sub(r"\]$", f" {attr}={value}]", entry)
+                                entry = re.sub(
+                                    r"\]$", lambda _m: f" {attr}={value}]", entry
+                                )
                             elif n_subs > 1:
                                 sys.stderr.write(
                                     f"Harness.create_graph() warning: {attr} overridden {n_subs} times in {keyword}!\n"
@@ -759,20 +871,63 @@ class Harness:
             self._graph = self.create_graph()
         return self._graph  # return cached graph
 
+    def _pipe(self, fmt: str) -> bytes:
+        """Run Graphviz on the harness graph and return the output.
+
+        In untrusted mode Graphviz runs as a subprocess with a timeout,
+        because the graphviz package's ``pipe()`` cannot stop it.
+        """
+        if not self.untrusted:
+            return self.graph.pipe(format=fmt)
+        check_dot_images(
+            self.graph.source,
+            {
+                html_img_tag(node.image)
+                for node in [*self.connectors.values(), *self.cables.values()]
+                if node.image is not None
+            },
+        )
+        try:
+            result = subprocess.run(
+                ["dot", "-Kdot", f"-T{fmt}"],
+                input=self.graph.source.encode("utf-8"),
+                capture_output=True,
+                timeout=UNTRUSTED_RENDER_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Graphviz did not finish within {UNTRUSTED_RENDER_TIMEOUT} s"
+            ) from exc
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Graphviz failed: " + result.stderr.decode("utf-8", "replace").strip()
+            )
+        return result.stdout
+
     @property
     def png(self):
-        from io import BytesIO
-
-        graph = self.graph
-        data = BytesIO()
-        data.write(graph.pipe(format="png"))
-        data.seek(0)
-        return data.read()
+        return self._render(("png",))["png"]
 
     @property
     def svg(self):  # TODO?: Verify xml encoding="utf-8" in SVG?
-        graph = self.graph
-        return embed_svg_images(graph.pipe(format="svg").decode("utf-8"), Path.cwd())
+        return self._render(("svg",))["svg"]
+
+    def _image_base_path(self) -> Path:
+        """Directory that relative image references resolve against: the
+        YAML source's directory when known, else the working directory."""
+        if self.source_path is not None and str(self.source_path) != "-":
+            return Path(self.source_path).parent
+        return Path.cwd()
+
+    def _declared_images(self) -> Set[Path]:
+        """Resolved paths of every ``image.src`` in the harness — the only
+        files ``embed_svg_images`` may read."""
+        base = self._image_base_path()
+        return {
+            (base / Path(node.image.src)).resolve()
+            for node in [*self.connectors.values(), *self.cables.values()]
+            if node.image is not None
+        }
 
     def output(
         self,
@@ -837,18 +992,29 @@ class Harness:
             sys.stderr.write("CSV output is not yet supported\n")
 
         if filename is None:
-            # stdout mode — emit each rendered format in the user-requested order
+            # stdout mode — emit each rendered format in the user-requested
+            # order. Text is written as UTF-8 bytes: text-mode stdout uses
+            # the locale encoding and, on Windows, rewrites \n as \r\n.
+            sys.stdout.flush()
+            out = getattr(sys.stdout, "buffer", None)
             for f in fmt:
                 content = outputs.get(f)
                 if content is None:
                     continue
-                if isinstance(content, (bytes, bytearray)):
-                    sys.stdout.buffer.write(content)
-                else:
+                if out is None:  # stdout replaced by a text-only stream
+                    if isinstance(content, (bytes, bytearray)):
+                        raise RuntimeError(f"Cannot write binary {f} to text stdout")
                     sys.stdout.write(content)
+                    continue
+                if not isinstance(content, (bytes, bytearray)):
+                    content = content.encode("utf-8")
+                out.write(content)
+            if out is not None:
+                out.flush()
             return
 
         suffix_map = {"tsv": "bom.tsv"}
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
         for f, content in outputs.items():
             ext = suffix_map.get(f, f)
             out_path = f"{filename}.{ext}"
@@ -902,27 +1068,29 @@ class Harness:
             # source's directory when known; fall back to cwd. (In practice
             # wireviz.parse() rewrites relative image paths to absolute
             # during YAML parse, so this base path only matters for SVG
-            # produced from already-rendered Harness objects or when a
-            # tweak injects a post-parse relative path.)
-            if self.source_path is not None and str(self.source_path) != "-":
-                base_path: Path = Path(self.source_path).parent
-            else:
-                base_path = Path.cwd()
+            # produced from already-rendered Harness objects.) Only the
+            # images declared in the harness are embedded: Graphviz copies
+            # some user text into the SVG unescaped, so any other <image>
+            # reference may point at an arbitrary local file.
             svg_str = embed_svg_images(
-                graph.pipe(format="svg").decode("utf-8"), base_path
+                self._pipe("svg").decode("utf-8"),
+                self._image_base_path(),
+                allowed_paths=self._declared_images(),
             )
+            if self.untrusted:
+                svg_str = sanitize_svg(svg_str)
             if "svg" in fmt:
                 outputs["svg"] = svg_str
 
         png_bytes: Optional[bytes] = None
         if "png" in fmt:
-            png_bytes = graph.pipe(format="png")
+            png_bytes = self._pipe("png")
             if yaml_source is not None:
                 png_bytes = _embed_yaml_in_png(png_bytes, yaml_source)
             outputs["png"] = png_bytes
 
         if "pdf" in fmt:
-            outputs["pdf"] = graph.pipe(format="pdf")
+            outputs["pdf"] = self._pipe("pdf")
 
         if "gv" in fmt:
             outputs["gv"] = graph.source
@@ -950,6 +1118,7 @@ class Harness:
                     png_b64=png_b64,
                     source_path=self.source_path,
                     template_dir=template_dir,
+                    untrusted=self.untrusted,
                 )
 
         return outputs

@@ -95,11 +95,11 @@ See the [tutorial page](../tutorial/readme.md) for sample code, as well as the [
 
 #### Requirements
 
-WireViz requires Python 3.7 or later.
+WireViz requires Python 3.9 or later.
 
 WireWiz requires GraphViz to be installed in order to work. See the [GraphViz download page](https://graphviz.org/download/) for OS-specific instructions.
 
-_Note_: Ubuntu 18.04 LTS users in particular may need to separately install Python 3.7 or above, as that comes with Python 3.6 as the included system Python install.
+_Note_: older Linux distributions may need a newer Python installed separately, if the system Python is older than 3.9.
 
 #### Installing the latest release
 

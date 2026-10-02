@@ -1,5 +1,37 @@
 # Change Log
 
+## [1.0.0] (2026-10-02)
+
+Security hardening and bug fixes from the October 2026 audit. First stable release of the fork. Design and threat model: [docs/plans/2026-10-02-october-2026-audit.md](plans/2026-10-02-october-2026-audit.md).
+
+### Security
+
+- SVG/HTML output no longer inlines arbitrary local files. Graphviz copies `options.fontname` and `<font face>` text into the SVG unescaped, so a YAML file could inject an `<image>` that pointed at any file (`~/.ssh/id_rsa`), which the embed step then base64-inlined. Only the images declared through `image.src` are embedded now, and `fontname` must be a plain font name.
+- Memory limits: pin/wire ranges and `pincount`/`wirecount` are capped at 10 000, and YAML alias trees in pin lists are refused (a few hundred bytes of YAML could allocate gigabytes).
+- PNG YAML embed and extract work on raw PNG chunks. No pixel decode, so no decompression bomb, and large renders no longer fail with `DecompressionBombError`.
+- New `parse(..., untrusted=True)` for servers that render YAML from other people (the wireviz-gui sidecar): string input is never read as a path, input is capped at 1 MB, images must be relative and inside `image_paths`, template names must be bare names, `tweak` is refused, SVG and HTML output are sanitized, and Graphviz runs with a 30 s timeout.
+
+### Bug fixes
+
+- `options.output_dpi` defaults to unset again. The 0.5.0 default of 96 made SVG and PDF output 1.33x too large; PNG output is unchanged.
+- `parse()` no longer keeps image search paths between calls (mutable default argument).
+- `parse()`: `source_path` resolves relative images for string/dict input; a `Path` input is always a file; non-UTF-8 files raise instead of being parsed as their own path; `.png` paths load the embedded YAML; `output_formats="svg"` works; dict input holding `Path` values works; `return_types="png"` embeds the YAML like file output.
+- Empty `metadata:`, `options:`, `tweak:` and `additional_bom_items:` sections no longer crash.
+- YAML aliases (`*name`) in `connections` no longer crash.
+- Missing output directories are created again (regression in 0.5.0).
+- Informational messages no longer go to stdout, where they corrupted `-O -` output.
+- CLI: `cat x.yml | wireviz -f s -O name -` writes `name.svg`; `cat x.yml | wireviz -` gives a usage error instead of a traceback; `-f ""` is a usage error; stdin/stdout are UTF-8 on every platform; `--prepend` is ignored (with a warning) when re-rendering a PNG; image search order is deterministic.
+- Wires with no color are as thick as other single-color wires when multi-color wires are present.
+- `show_equiv: true` without a gauge no longer crashes ([upstream #497](https://github.com/wireviz/WireViz/issues/497), port of [upstream #498](https://github.com/wireviz/WireViz/pull/498)); gauge `1.0` finds its AWG equivalent.
+- Tweak override values containing backslashes (`\N`, `\l`) or characters such as `#` render correctly.
+- Image paths containing `&` render.
+- Mates (`-->`) accept pin labels, as cable connections do ([upstream #510](https://github.com/wireviz/WireViz/issues/510)).
+
+### Requirements
+
+- Python 3.9 or later (3.7 and 3.8 are end-of-life). CI tests 3.9-3.14.
+- Minimum versions: click 8.0, pyyaml 5.4, pillow 10.3, graphviz (Python package) 0.20.
+
 ## [0.5.0] (2026-05-05)
 
 First release of the [ClassicMiniDIY/WireViz](https://github.com/ClassicMiniDIY/WireViz) fork. Pulls in seven open upstream PRs that had been sitting unmerged for years, lays an automated test suite, and fixes a handful of bugs surfaced along the way.

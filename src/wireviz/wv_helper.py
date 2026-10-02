@@ -5,6 +5,13 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
+from wireviz.wv_safety import MAX_EXPAND
+
+# Conservative equivalents (see upstream #282): each AWG value has no more
+# copper than its metric size, and each metric size is the smallest
+# standard size with at least as much copper as its AWG value. Common
+# charts pair 0.5 mm2 with 20 AWG, but 20 AWG (0.518 mm2) holds more
+# copper than 0.5 mm2. Keep this property when editing the table.
 awg_equiv_table = {
     "0.09": "28",
     "0.14": "26",
@@ -27,12 +34,20 @@ awg_equiv_table = {
 mm2_equiv_table = {v: k for k, v in awg_equiv_table.items()}
 
 
+def _gauge_key(value) -> str:
+    """Table key for a gauge value: 1.0, "1.0" and 1 all become "1"."""
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def awg_equiv(mm2):
-    return awg_equiv_table.get(str(mm2), "Unknown")
+    return awg_equiv_table.get(_gauge_key(mm2), "Unknown")
 
 
 def mm2_equiv(awg):
-    return mm2_equiv_table.get(str(awg), "Unknown")
+    return mm2_equiv_table.get(_gauge_key(awg), "Unknown")
 
 
 def expand(yaml_data):
@@ -44,23 +59,28 @@ def expand(yaml_data):
     if not isinstance(yaml_data, list):
         yaml_data = [yaml_data]
     for e in yaml_data:
+        if isinstance(e, (list, dict)):
+            # Without this check, str(e) of a YAML alias tree can grow
+            # exponentially (a few hundred bytes of YAML -> gigabytes).
+            raise ValueError(
+                f"Expected a pin/wire number, name or range, but got a {type(e).__name__}"
+            )
         e = str(e)
         if "-" in e:
             a, b = e.split("-", 1)
             try:
                 a = int(a)
                 b = int(b)
-                if a < b:
-                    for x in range(a, b + 1):
-                        output.append(x)  # ascending range
-                elif a > b:
-                    for x in range(a, b - 1, -1):
-                        output.append(x)  # descending range
-                else:  # a == b
-                    output.append(a)  # range of length 1
-            except:
+            except ValueError:
                 # '-' was not a delimiter between two ints, pass e through unchanged
                 output.append(e)
+                continue
+            if abs(a - b) + 1 > MAX_EXPAND:
+                raise ValueError(
+                    f"Range {e} has more than the limit of {MAX_EXPAND} entries"
+                )
+            step = 1 if a <= b else -1  # ascending, descending, or length 1
+            output.extend(range(a, b + step, step))
         else:
             try:
                 x = int(e)  # single int

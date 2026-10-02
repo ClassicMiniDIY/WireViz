@@ -7,6 +7,8 @@ regress to the pre-fix state. Each test cites the PR (or PRs) it
 guards.
 """
 
+import io
+import re
 from pathlib import Path
 
 import pytest
@@ -19,7 +21,6 @@ from wireviz.wireviz import parse
 from wireviz.wv_cli import wireviz as cli
 from wireviz.wv_colors import get_color_hex
 from wireviz.wv_html import _latest_revision
-
 
 # ===========================================================================
 # Bug fixes from upstream PR #1 (4 fixes bundled)
@@ -220,17 +221,28 @@ connections:
     assert "None" not in gv
 
 
-def test_pr379_default_dpi_is_96(workdir: Path, minimal_yaml: Path):
-    """Default ``Options.output_dpi`` is 96.0 (graphviz default for
-    non-PostScript), so existing harnesses are unchanged."""
+def test_pr379_default_dpi_omitted(workdir: Path, minimal_yaml: Path):
+    """October 2026 audit, bug 2. The v0.5.0 default of 96.0 scaled
+    SVG/PDF by 96/72. The default is now no dpi attribute: SVG/PDF at
+    true size and PNG at Graphviz's 96 dpi, identical to v0.4.1."""
     parse(
         minimal_yaml,
-        output_formats=("gv",),
+        output_formats=("gv", "svg"),
         output_dir=workdir,
         output_name="default",
     )
     gv = (workdir / "default.gv").read_text()
-    assert "dpi=96.0" in gv
+    assert "dpi=" not in gv
+    svg_96 = parse(
+        minimal_yaml.read_text().replace(
+            "connectors:", "options: {output_dpi: 96}\nconnectors:", 1
+        ),
+        return_types="svg",
+    )
+    width = lambda svg: float(re.search(r'<svg width="([\d.]+)pt"', svg)[1])
+    assert width(svg_96) == pytest.approx(
+        width((workdir / "default.svg").read_text()) * 96 / 72, rel=0.02
+    )
 
 
 # ===========================================================================
@@ -271,8 +283,9 @@ def test_pr234_round_trip_via_png(workdir: Path, minimal_yaml: Path):
 def test_pr234_review_im_info_preserved_through_embed(workdir: Path):
     """PR #5 review fix. Re-encoding the PNG to add the iTXt chunk
     doesn't lose existing metadata chunks (DPI etc)."""
-    from wireviz.Harness import _embed_yaml_in_png
     import io
+
+    from wireviz.Harness import _embed_yaml_in_png
 
     # Make a PNG with a DPI hint
     buf = io.BytesIO()
@@ -439,8 +452,10 @@ def test_pr367_review_pdf_docstring_says_diagram_only():
 def test_pr10_review_data_uri_no_leading_space():
     """PR #10 review fix. RFC 2397 says no whitespace after the
     ``base64,`` separator in data URIs."""
+    import os
+    import tempfile
+
     from wireviz.svgembed import data_URI_base64
-    import tempfile, os
 
     # Write a tiny PNG to disk and base64-URI it
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
@@ -463,7 +478,8 @@ def test_pr10_review_unknown_format_uses_click_usage_error(runner, minimal_yaml:
     result = runner.invoke(cli, ["-f", "X", str(minimal_yaml)])
     assert result.exit_code == 2
     # click.UsageError adds the canonical "Try 'wireviz -h' for help."
-    assert "Try 'wireviz -h' for help" in result.stderr
+    # Older Click names the first help option (-h); newer Click (8.5) names --help.
+    assert re.search(r"Try 'wireviz (-h|--help)' for help", result.stderr)
 
 
 def test_pr10_review_source_path_autofills(minimal_yaml: Path):
@@ -480,3 +496,311 @@ def test_pr10_review_missing_input_clean_error(runner, workdir: Path):
     result = runner.invoke(cli, [str(workdir / "missing.yml")])
     assert result.exit_code == 2
     assert "does not exist" in result.stderr.lower()
+
+
+# ===========================================================================
+# October 2026 audit — parse() API bugs
+# (docs/plans/2026-10-02-october-2026-audit.md, bug numbers in brackets)
+# ===========================================================================
+
+TRS_PNG = (
+    Path(__file__).resolve().parent.parent
+    / "examples"
+    / "resources"
+    / "stereo-phone-plug-TRS.png"
+)
+
+
+def _two_dirs_with_logo(tmp_path: Path):
+    dirs = []
+    for name, color in (("a", "red"), ("b", "blue")):
+        d = tmp_path / name
+        d.mkdir()
+        Image.new("RGB", (4, 4), color).save(d / "logo.png")
+        (d / "h.yml").write_text(
+            "connectors:\n  X1:\n    pincount: 1\n    image: {src: logo.png}\n"
+            "connections: [[X1]]\n"
+        )
+        dirs.append(d)
+    return dirs
+
+
+def test_audit_1_image_paths_do_not_leak_between_calls(tmp_path: Path):
+    """[1] Each call resolves images against its own file's directory."""
+    a, b = _two_dirs_with_logo(tmp_path)
+    parse(a / "h.yml", return_types="harness")
+    h = parse(b / "h.yml", return_types="harness")
+    assert Path(h.connectors["X1"].image.src).parent == b.resolve()
+
+
+def test_audit_1_image_paths_accepts_str(tmp_path: Path):
+    a, _ = _two_dirs_with_logo(tmp_path)
+    h = parse((a / "h.yml").read_text(), return_types="harness", image_paths=str(a))
+    assert Path(h.connectors["X1"].image.src).parent == a.resolve()
+
+
+def test_audit_3_info_message_not_on_stdout(loopback_yaml: Path, capsys):
+    """[3] The loop-only auto-instantiate notice must not corrupt -O -."""
+    parse(loopback_yaml, output_formats=("svg",), output_dir="-")
+    captured = capsys.readouterr()
+    assert captured.out.lstrip().startswith("<?xml")
+    assert "auto-instantiating" in captured.err
+
+
+def test_audit_4_dict_with_path_values(tmp_path: Path):
+    """[4] Dict input with values YAML cannot represent still parses;
+    a PNG is produced without the embedded chunk."""
+    data = {
+        "connectors": {"X1": {"pincount": 1, "image": {"src": TRS_PNG}}},
+        "connections": [["X1"]],
+    }
+    assert parse(data, return_types="harness").connectors["X1"].image
+    png = parse(data, return_types="png")
+    assert png.startswith(b"\x89PNG") and b"wireviz:yaml" not in png
+
+
+def test_audit_5_output_dir_is_created(tmp_path: Path, minimal_yaml: Path):
+    """[5] Regression from the stdin/stdout port: a missing output
+    directory is created, as graphviz.render() used to do."""
+    out = tmp_path / "new" / "dir"
+    parse(minimal_yaml, output_formats=("svg",), output_dir=out)
+    assert (out / "minimal.svg").exists()
+
+
+def test_audit_7_source_path_resolves_images_for_str_input(tmp_path: Path):
+    """[7] source_path supplies the image directory for str/dict input."""
+    a, _ = _two_dirs_with_logo(tmp_path)
+    svg = parse((a / "h.yml").read_text(), return_types="svg", source_path=a / "h.yml")
+    assert "data:image/png;base64," in svg
+
+
+def test_audit_8_non_utf8_file_raises(tmp_path: Path):
+    """[8] A real file that is not UTF-8 raises instead of being parsed
+    as a YAML string made of its path."""
+    f = tmp_path / "latin1.yml"
+    f.write_bytes(
+        "connectors: {X1: {pincount: 1, notes: '25\xb0C'}}\n".encode("latin-1")
+    )
+    with pytest.raises(UnicodeDecodeError):
+        parse(str(f), return_types="harness")
+
+
+def test_audit_8_missing_path_object_raises(tmp_path: Path):
+    """[8] A Path input is always a file, never YAML text."""
+    with pytest.raises(FileNotFoundError):
+        parse(tmp_path / "missing.yml", return_types="harness")
+
+
+def test_audit_8_png_path_input(tmp_path: Path, minimal_yaml: Path):
+    """[8] parse() accepts a WireViz PNG, as Harness.output documents."""
+    parse(minimal_yaml, output_formats=("png",), output_dir=tmp_path)
+    h = parse(tmp_path / "minimal.png", return_types="harness")
+    assert "X1" in h.connectors
+
+
+def test_audit_10_output_formats_as_str(minimal_yaml: Path, capsys):
+    """[10] output_formats="svg" is one format, not three letters."""
+    parse(minimal_yaml, output_formats="svg", output_dir="-")
+    assert "<svg" in capsys.readouterr().out
+
+
+def test_audit_17_yaml_alias_in_connections():
+    """[17] A connection set reused through a YAML alias."""
+    src = """
+connectors:
+  X1: {pincount: 2}
+  X2: {pincount: 2}
+cables:
+  W1: {wirecount: 2}
+  W2: {wirecount: 2}
+connections:
+  - &pair
+    - X1: [1, 2]
+    - W1: [1, 2]
+  - *pair
+  - - X2: [1, 2]
+    - W2: [1, 2]
+"""
+    h = parse(src, return_types="harness")
+    assert len(h.cables["W1"].connections) == 4
+
+
+@pytest.mark.parametrize("section", ["metadata", "options", "tweak"])
+def test_audit_18_empty_sections(section: str):
+    """[18] `metadata:` with no value (None) is the same as `{}`."""
+    src = f"{section}:\nconnectors: {{X1: {{pincount: 1}}}}\nconnections: [[X1]]\n"
+    assert parse(src, return_types="harness")
+
+
+def test_audit_png_return_matches_file_output(minimal_yaml: Path):
+    """parse(return_types="png") embeds the YAML like file output."""
+    png = parse(minimal_yaml, return_types="png")
+    assert read_yaml_from_png(io.BytesIO(png)) == minimal_yaml.read_text()
+
+
+# ===========================================================================
+# October 2026 audit — CLI bugs
+# ===========================================================================
+
+
+def test_audit_9_stdin_with_output_name_writes_files(
+    runner, workdir: Path, minimal_yaml: Path
+):
+    """[9] `cat x.yml | wireviz -f s -O foo -` writes foo.svg."""
+    result = runner.invoke(
+        cli, ["-f", "s", "-O", "foo", "-"], input=minimal_yaml.read_text()
+    )
+    assert result.exit_code == 0, result.stderr
+    assert (workdir / "foo.svg").exists()
+    assert "<svg" not in result.stdout
+
+
+def test_audit_9_stdin_default_formats_clean_error(runner, minimal_yaml: Path):
+    """[9] Default formats (hpst) to stdout is a usage error, not a traceback."""
+    result = runner.invoke(cli, ["-"], input=minimal_yaml.read_text())
+    assert result.exit_code == 2
+    assert "Exactly one output format" in result.stderr
+
+
+def test_audit_11_stdin_stdout_utf8(runner, workdir: Path):
+    """[11] Non-ASCII text survives stdin -> stdout as UTF-8."""
+    src = "connectors:\n  X1:\n    pinlabels: [Ω-sense]\nconnections: [[X1]]\n"
+    result = runner.invoke(cli, ["-f", "g", "-O", "-", "-"], input=src.encode("utf-8"))
+    assert result.exit_code == 0, result.stderr
+    assert "Ω-sense" in result.stdout_bytes.decode("utf-8")
+
+
+def test_audit_12_png_input_ignores_prepend(runner, workdir: Path):
+    """[12] Re-rendering a PNG made with --prepend must not prepend twice
+    (duplicate YAML anchors)."""
+    (workdir / "lib.yml").write_text("templates:\n  - &molex {pincount: 2}\n")
+    (workdir / "main.yml").write_text(
+        "connectors:\n  X1: *molex\nconnections: [[X1]]\n"
+    )
+    first = runner.invoke(cli, ["-f", "p", "-p", "lib.yml", "main.yml"])
+    assert first.exit_code == 0, first.stderr
+    second = runner.invoke(cli, ["-f", "s", "-p", "lib.yml", "main.png"])
+    assert second.exit_code == 0, second.stderr
+    assert "ignored for PNG input" in second.stderr
+    assert (workdir / "main.svg").exists()
+
+
+def test_audit_19_empty_format_is_usage_error(runner, minimal_yaml: Path):
+    """[19] `-f ""` is a usage error, not an IndexError."""
+    result = runner.invoke(cli, ["-f", "", str(minimal_yaml)])
+    assert result.exit_code == 2
+    assert "No output format" in result.stderr
+
+
+# ===========================================================================
+# October 2026 audit — rendering bugs
+# ===========================================================================
+
+
+def test_audit_13_uncolored_wire_is_padded():
+    """[13] A wire with no color gets the same stripe count as other
+    single-color wires when padding is on."""
+    assert len(get_color_hex("", pad=True)) == len(get_color_hex("RD", pad=True)) == 3
+    assert len(get_color_hex("", pad=False)) == 1
+
+
+def test_audit_14_show_equiv_without_gauge():
+    """[14] Upstream #497 / PR #498: show_equiv with no gauge crashed."""
+    src = "cables: {W1: {wirecount: 1, show_equiv: true}}\nconnections: [[W1]]\n"
+    assert "<svg" in parse(src, return_types="svg")
+
+
+@pytest.mark.parametrize(
+    "gauge, expected", [(1.0, "18 AWG"), ("1.0 mm2", "18 AWG"), (0.5, "21 AWG")]
+)
+def test_audit_14_float_gauge_lookup(gauge, expected):
+    """[14] gauge 1.0 used to show "(Unknown AWG)"."""
+    src = (
+        f"cables: {{W1: {{wirecount: 1, gauge: {gauge!r}, show_equiv: true}}}}\n"
+        "connections: [[W1]]\n"
+    )
+    assert expected in parse(src, return_types="harness").graph.source
+
+
+@pytest.mark.parametrize(
+    "value, emitted",
+    [
+        ('"\\N left\\l"', 'xlabel="\\N left\\l"'),  # backslashes kept literally
+        ("#ff0000", 'xlabel="#ff0000"'),  # not a plain ID -> quoted
+        ("red", "xlabel=red"),
+        ("a b", 'xlabel="a b"'),
+    ],
+)
+def test_audit_15_tweak_override_values(value: str, emitted: str):
+    """[15] Override values are inserted literally and quoted when DOT
+    needs quotes."""
+    data = {
+        "connectors": {"X1": {"pincount": 1}},
+        "connections": [["X1"]],
+        "tweak": {"override": {"X1": {"xlabel": value}}},
+    }
+    h = parse(data, return_types="harness")
+    assert emitted in h.graph.source
+    assert "<svg" in h.svg
+
+
+# ===========================================================================
+# Upstream issue #510 — pin labels in mate (arrow) connections
+# ===========================================================================
+
+
+def test_issue510_mate_pins_by_label():
+    src = """
+connectors:
+  X1: {pinlabels: [GND, VCC]}
+  X2: {pinlabels: [GND, VCC]}
+connections:
+  - - X1: [VCC, GND]
+    - -->
+    - X2: [VCC, GND]
+"""
+    h = parse(src, return_types="harness")
+    assert [(m.from_pin, m.to_pin) for m in h.mates] == [(2, 2), (1, 1)]
+    assert "<svg" in h.svg
+
+
+def test_issue510_mate_unknown_pin_clear_error():
+    src = """
+connectors:
+  X1: {pinlabels: [GND]}
+  X2: {pinlabels: [GND]}
+connections:
+  - - X1: [NOPE]
+    - -->
+    - X2: [GND]
+"""
+    with pytest.raises(Exception, match="X1:NOPE not found"):
+        parse(src, return_types="harness")
+
+
+@pytest.mark.parametrize(
+    "value, emitted",
+    [
+        ("x\\", 'xlabel="x\\\\"'),  # trailing backslash cannot eat the quote
+        ('"a" b "c"', 'xlabel="\\"a\\" b \\"c\\""'),  # not one quoted string
+        ('"already quoted"', 'xlabel="already quoted"'),
+    ],
+)
+def test_review_tweak_value_quoting_edge_cases(value: str, emitted: str):
+    data = {
+        "connectors": {"X1": {"pincount": 1}},
+        "connections": [["X1"]],
+        "tweak": {"override": {"X1": {"xlabel": value}}},
+    }
+    h = parse(data, return_types="harness")
+    assert emitted in h.graph.source
+    assert "<svg" in h.svg
+
+
+def test_review3_str_path_to_png_without_yaml(tmp_path: Path):
+    """A str path to a real PNG without WireViz YAML reports that, not
+    a confusing 'Expected a dict' error."""
+    f = tmp_path / "plain.png"
+    f.write_bytes(TRS_PNG.read_bytes())
+    with pytest.raises(ValueError, match="no embedded WireViz YAML"):
+        parse(str(f), return_types="harness")

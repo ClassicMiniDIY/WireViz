@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 
 from wireviz.wv_colors import COLOR_CODES, Color, ColorMode, Colors, ColorScheme
 from wireviz.wv_helper import aspect_ratio, int2tuple
+from wireviz.wv_safety import check_count, check_fontname
 
 # Each type alias have their legal values described in comments - validation might be implemented in the future
 PlainText = str  # Text not containing HTML tags nor newlines
@@ -60,13 +61,14 @@ class Options:
     mini_bom_mode: bool = True
     template_separator: str = "."
     # Graphviz dpi attribute (https://graphviz.org/docs/attrs/dpi/) — controls
-    # the resolution of raster (PNG) output and the size unit of vector (SVG)
-    # output. Default 96.0 matches Graphviz's default for non-PostScript
-    # output. Set to ``null`` in YAML (``None`` in Python) to omit the dpi
-    # attribute entirely and let Graphviz pick its renderer-specific default.
-    output_dpi: Optional[float] = 96.0
+    # the resolution of raster (PNG) output and ALSO scales vector (SVG, PDF)
+    # output by dpi/72. Default None omits the attribute: PNG renders at
+    # Graphviz's 96 dpi and SVG/PDF at true size, identical to v0.4.1.
+    # (v0.5.0 defaulted to 96.0, which made SVG/PDF 1.33x too large.)
+    output_dpi: Optional[float] = None
 
     def __post_init__(self):
+        check_fontname(self.fontname)
         if not self.bgcolor_node:
             self.bgcolor_node = self.bgcolor
         if not self.bgcolor_connector:
@@ -204,6 +206,8 @@ class Connector:
                 raise Exception(
                     "You need to specify at least one, pincount, pins, pinlabels, or pincolors"
                 )
+
+        check_count(f"Connector {self.name} pincount", self.pincount)
 
         # create default list for pins (sequential) if not specified
         if not self.pins:
@@ -393,6 +397,7 @@ class Cable:
         self.connections = []
 
         if self.wirecount:  # number of wires explicitly defined
+            check_count(f"Cable {self.name} wirecount", self.wirecount)
             if self.colors:  # use custom color palette (partly or looped if needed)
                 pass
             elif self.color_code:

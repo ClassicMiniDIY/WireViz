@@ -7,16 +7,10 @@ jobs:
     strategy:
       max-parallel: 6
       matrix:
-        # ubuntu-22.04 supports Python 3.7-3.12
-        # ubuntu-24.04 (currently latest & preferred) supports Python 3.9-3.12
-        # More details: https://github.com/actions/runner-images/issues/10636
+        # Python 3.7 and 3.8 are end-of-life and were dropped in 1.0.0
+        # (setup.py python_requires=">=3.9").
         os: [ubuntu-latest]
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
-        include:
-          - os: ubuntu-22.04
-            python-version: "3.7"
-          - os: ubuntu-22.04
-            python-version: "3.8"
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4

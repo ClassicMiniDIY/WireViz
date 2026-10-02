@@ -1,5 +1,5 @@
-click
-graphviz
-pillow
-pyyaml
+click>=8.0
+graphviz>=0.20
+pillow>=10.3
+pyyaml>=5.4
 setuptools

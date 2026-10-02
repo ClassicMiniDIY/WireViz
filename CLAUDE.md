@@ -68,6 +68,7 @@ CI (`.github/workflows/`) runs both `pytest` (the `Tests` workflow) and `build_e
 - **`tests/test_bom.py`** — BOM aggregation: identical-component dedup, ignore_in_bom, additional_bom_items, bundle category, part-number columns.
 - **`tests/test_regressions.py`** — **one test per upstream-PR port + every gemini review fix.** This is where every bug we ported a fix for gets pinned down so it can never silently regress. If you change behavior touched by any of those PRs, expect tests here to fail and update them deliberately.
 - **`tests/test_round_trip.py`** — PNG embed/extract, stdin→stdout pipelines, dict-input no-mutation contract.
+- **`tests/test_upstream_issues.py`** — one test per upstream wireviz/WireViz issue fixed in the fork (`test_issueNNN_*`). Triage of all upstream issues: `docs/plans/2026-10-02-upstream-issue-triage.md`.
 - **`tests/test_security.py`** — one test per finding of the October 2026 security audit (C1, C2, H1-H3, M1-M3, L1): always-on limits plus every `untrusted=True` rule. The `test_audit_*` tests in `test_regressions.py` pin the bugs from the same audit.
 
 `tests/conftest.py` provides shared fixtures (paths to small targeted YAMLs in `tests/fixtures/`). The fixture YAMLs are deliberately separate from the gallery YAMLs in `examples/` so tests aren't coupled to visual gallery changes.
@@ -97,6 +98,7 @@ The pipeline is **YAML → Harness object graph → GraphViz `.gv` → rendered 
 - **`svgembed.py`** — inlines referenced raster images into the SVG so the SVG/HTML output is self-contained.
 - **`wv_bom.py`** — BOM aggregation/dedup logic (`mini_bom_mode`, part-number handling, additional components). Reused for both the standalone `.bom.tsv` and the BOM table embedded in HTML.
 - **`wv_colors.py`** — IEC 60757 color codes, color-scheme generators (DIN 47100, 25-pair, TIA/EIA 568), `ColorMode` (SHORT / FULL / HEX, upper/lower).
+- **`wv_images.py`** — turns `data:image/...;base64` URIs and `.webp` files into PNG files in the harness's private temp dir (`Harness.temp_dir()`, removed when the Harness is garbage-collected). Graphviz needs a file in a format its build can read.
 - **`wv_helper.py`** — shared utilities: `awg_equiv`/`mm2_equiv` gauge conversion, `expand` (range syntax), `tuplelist2tsv`, `smart_file_resolve` (image-path resolution against the input dir + `--prepend` dirs).
 
 ### Cross-cutting things to know
@@ -107,6 +109,12 @@ The pipeline is **YAML → Harness object graph → GraphViz `.gv` → rendered 
 - **Backwards-compat shims**: `OLD_CONNECTOR_ATTR` in `Harness.py` maps deprecated keys (`pinout`, `pinnumbers`, `autogenerate`) to friendly errors. Add new deprecations there rather than silently accepting old keys.
 - **Generated artifacts (`*.gv`, `*.svg`, `*.png`, `*.html`, `*.bom.tsv` under `examples/`, `tutorial/`) are checked into git.** Don't include incidental rebuilds in PRs — the project policy (per `CONTRIBUTING.md`) is that maintainers rebuild on merge. Use `build_examples.py restore` before committing.
 
+## YAML loading and text escaping (load-bearing)
+
+- **Load YAML only through `wv_helper.yaml_load()`** — never `yaml.safe_load`. It uses YAML 1.2 booleans, so `NO`/`NC`/`ON`/`Yes` stay text in pin and wire labels (upstream #305). Boolean dataclass fields convert yes/no/on/off back through `DataClasses._coerce_bools`; a new `bool` field gets this automatically, a new boolean outside a dataclass needs `wv_helper.yaml11_bool`.
+- **Text that goes into a Graphviz HTML label goes through `wv_gv_html.html_text()` or `html_line_breaks()`**, which escape bare `&`, `<` and `>` while keeping tags and entities (upstream #230). The DOT parser counts angle brackets, so one bare `>` breaks the whole graph.
+- **Node names and edges:** `dot.node(nohtml(name))` and `Harness._edge()` — never `dot.edge("a:p1r:e", ...)`. graphviz splits edge strings on `:` (upstream #487) and treats a name like `<X>` as an HTML label.
+
 ## Untrusted input (load-bearing)
 
 `wireviz-gui` renders YAML sent from a browser, so this library must be safe for input its caller did not write. Design: `docs/plans/2026-10-02-october-2026-audit.md`. The contract:
@@ -116,6 +124,7 @@ The pipeline is **YAML → Harness object graph → GraphViz `.gv` → rendered 
 - **`parse(..., untrusted=True)`** sets `Harness.untrusted`, and `Harness._render` honors it (the sidecar calls `_render` directly). Untrusted: a `str` input is always YAML text (never a path); 1 MB cap; `image.src` relative and inside `image_paths`, ≤ 50 MP; `metadata.template.name` a bare name; `tweak` refused; SVG rebuilt by `sanitize_svg`; HTML values through `sanitize_html_fragment`; Graphviz via subprocess with a timeout (`Harness._pipe`).
 - **Graphviz loads every `<img>` in an HTML-like label**, including one a user types into `notes`, and rasterizes it into PNG/PDF. In untrusted mode `wv_safety.check_dot_images` (called from `Harness._pipe`) allows only the exact strings `wv_gv_html.html_img_tag` generates and refuses any other `<img`. Do not replace this with attribute parsing: Graphviz reads attribute names case-insensitively and uses the last `src`. If you change the generated `<img>` markup, change it only in `html_img_tag`.
 - In untrusted HTML output a metadata key may not replace a built-in placeholder (`fontname`, `bgcolor`, ...), and `metadata.template.sheetsize` must be a bare name: the templates put those values in attribute and style contexts.
+- `image.src` may be a `data:image/...;base64` URI (`wv_images.py`). It is decoded to a PNG in `Harness.temp_dir()`, with the same pixel cap; in untrusted mode it is the only image source that needs no `image_paths`. Never let a data URI name a file path.
 - New output paths that put user text into SVG or HTML must go through the same sanitizers when `untrusted` is set, and get a test in `tests/test_security.py`.
 - `parse()` never mutates its arguments: `image_paths` is copied, dict input is deep-copied, each connection set is deep-copied before expansion.
 - `options.output_dpi` defaults to `None`. Graphviz's `dpi` also scales SVG/PDF by dpi/72, so a non-None default changes every vector output.

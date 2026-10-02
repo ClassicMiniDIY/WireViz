@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import sys
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+from PIL.ImageColor import colormap as _css_colormap
 
 COLOR_CODES = {
     # fmt: off
@@ -129,12 +131,37 @@ ColorMode = (
 ColorScheme = str  # Color scheme name = Literal[COLOR_CODES.keys()]
 
 
+def css_color_hex(input: str) -> Optional[str]:
+    """Return the hex value of a CSS/HTML color name such as ``tomato`` or
+    ``lightgreen`` (case-insensitive), or None (upstream #135, #271).
+
+    CSS names never clash with WireViz codes: the codes are upper-case
+    two-letter pairs, and no CSS name splits into valid pairs.
+    """
+    if not isinstance(input, str) or not input or input[0] == "#":
+        return None
+    if len(input) % 2 == 0 and all(
+        input[i : i + 2] in _color_hex for i in range(0, len(input), 2)
+    ):
+        return None  # a sequence of WireViz color codes
+    value = _css_colormap.get(input.lower())
+    if value is None:
+        return None
+    if value.startswith("#") and len(value) == 7:
+        return value.lower()
+    from PIL.ImageColor import getrgb
+
+    return "#{:02x}{:02x}{:02x}".format(*getrgb(input.lower())[:3])
+
+
 def get_color_hex(input: Colors, pad: bool = False) -> List[str]:
     """Return list of hex colors from either a string of color names or :-separated hex colors."""
     if input is None or input == "":
         # No color: one default stripe, padded below like any other
         # single-color wire.
         output = [color_default]
+    elif css_color_hex(input):  # CSS color name, e.g. tomato
+        output = [css_color_hex(input)]
     elif input[0] == "#":  # Hex color(s)
         output = input.split(":")
         for i, c in enumerate(output):
@@ -183,6 +210,8 @@ def get_color_translation(translate: Dict[Color, str], input: Colors) -> List[st
 def translate_color(input: Colors, color_mode: ColorMode) -> str:
     if input == "" or input is None:
         return ""
+    if css_color_hex(input):  # CSS names are shown as written, or as hex
+        return css_color_hex(input) if color_mode.lower() == "hex" else input
     upper = color_mode.isupper()
     if not (color_mode.isupper() or color_mode.islower()):
         raise Exception("Unknown color mode capitalization")

@@ -77,6 +77,41 @@ class Metadata(dict):
 
 
 @dataclass
+class Terminology:
+    """Words used in the diagram and BOM that a user may replace, for
+    example "way" or "contact" for "pin" (upstream #331, PR #398)."""
+
+    pin: Optional[PlainText] = None
+    wire: Optional[PlainText] = None
+    shield: Optional[PlainText] = None
+
+    def __post_init__(self):
+        self.pin = self.pin or "pin"
+        self.wire = self.wire or "wire"
+        self.shield = self.shield or "shield"
+
+
+@dataclass
+class Strip:
+    """Stripping lengths at a connector (upstream #296, PR #446).
+    Numbers are taken as millimetres."""
+
+    sleeve: Union[float, str, None] = None
+    insulation: Union[float, str, None] = None
+
+    def description(self) -> Optional[str]:
+        parts = [
+            f"{name} {value if isinstance(value, str) else f'{value} mm'}"
+            for name, value in (
+                ("sleeve", self.sleeve),
+                ("insulation", self.insulation),
+            )
+            if value is not None
+        ]
+        return "Strip " + ", ".join(parts) if parts else None
+
+
+@dataclass
 class Options:
     fontname: PlainText = "arial"
     bgcolor: Color = "WH"
@@ -93,10 +128,15 @@ class Options:
     # Graphviz's 96 dpi and SVG/PDF at true size, identical to v0.4.1.
     # (v0.5.0 defaulted to 96.0, which made SVG/PDF 1.33x too large.)
     output_dpi: Optional[float] = None
+    # Draw metadata.title above the diagram in PNG/SVG/PDF output (#460).
+    show_title: bool = False
+    terminology: Optional[Terminology] = None
 
     def __post_init__(self):
         _coerce_bools(self)
         check_fontname(self.fontname)
+        if not isinstance(self.terminology, Terminology):
+            self.terminology = Terminology(**(self.terminology or {}))
         if not self.bgcolor_node:
             self.bgcolor_node = self.bgcolor
         if not self.bgcolor_connector:
@@ -203,12 +243,15 @@ class Connector:
     ignore_in_bom: bool = False
     additional_components: List[AdditionalComponent] = field(default_factory=list)
     tweak: Optional[Tweak] = None
+    strip: Optional[Strip] = None
 
     def __post_init__(self) -> None:
         _coerce_bools(self)
         _check_lists(
             f"Connector {self.name}", self, ("pins", "pinlabels", "pincolors", "loops")
         )
+        if isinstance(self.strip, dict):
+            self.strip = Strip(**self.strip)
         if isinstance(self.image, str):  # `image: file.png` (upstream #292)
             self.image = Image(src=self.image)
         if isinstance(self.image, dict):
@@ -260,8 +303,13 @@ class Connector:
             self.show_pincount = self.style != "simple"
 
         resolved_loops = []
+        # Color of each loop, parallel to self.loops; None = default look.
+        self.loop_colors: List[Optional[Color]] = []
         for loop in self.loops:
-            # TODO: include properties of wire used to create the loop
+            # A loop may carry a color: {RD: [1, 2]} (upstream #457, PR #288)
+            color = None
+            if isinstance(loop, dict) and len(loop) == 1:
+                color, loop = next(iter(loop.items()))
             if not isinstance(loop, (list, tuple)) or len(loop) != 2:
                 raise Exception(
                     f"Connector {self.name}: loops must be between exactly two pins"
@@ -272,6 +320,7 @@ class Connector:
                 # Make sure loop connected pins are not hidden.
                 self.activate_pin(pin, None)
             resolved_loops.append(loop)
+            self.loop_colors.append(color)
         self.loops = resolved_loops
 
         for i, item in enumerate(self.additional_components):
@@ -396,6 +445,8 @@ class Cable:
     color_code: Optional[ColorScheme] = None
     show_name: Optional[bool] = None
     show_wirecount: bool = True
+    # False: no cable box; each wire is drawn from connector to connector (#212)
+    show_box: bool = True
     show_wirenumbers: Optional[bool] = None
     ignore_in_bom: bool = False
     additional_components: List[AdditionalComponent] = field(default_factory=list)

@@ -86,7 +86,13 @@ tweak:  # optional tweaking of .gv output
   # loops
   loops: <List>  # every list item is itself a list of exactly two pins
                  # on the connector that are to be shorted;
-                 # pins may be given by number or by pin label, e.g. [VCC, SENSE]
+                 # pins may be given by number or by pin label, e.g. [VCC, SENSE];
+                 # give a loop a wire color with a one-key mapping: {RD: [VCC, SENSE]}
+
+  # stripping lengths at this connector (shown in the diagram)
+  strip:
+    sleeve: <int/float/str>      # numbers are taken as mm, e.g. 10 or '0.4 in'
+    insulation: <int/float/str>  # e.g. 2.5
 
   # optional tweaking of .gv output executed for each instance of this connector
   tweak:  # see tweak section below
@@ -158,6 +164,9 @@ tweak:  # optional tweaking of .gv output
   show_name: <bool>         # defaults to true
   show_wirecount: <bool>    # defaults to true
   show_wirenumbers: <bool>  # defaults to true for cables; false for bundles
+  show_box: <bool>          # defaults to true; false hides the cable box and draws
+                            # each wire straight from connector to connector
+                            # (every wire then needs a connector at both ends)
 
   # optional tweaking of .gv output executed for each instance of this cable
   tweak:  # see tweak section below
@@ -414,6 +423,16 @@ See [HTML Output Templates](../src/wireviz/templates/) for how metadata entries 
   # vector (SVG, PDF) output by dpi/72 when it is set. When omitted,
   # PNG renders at 96 dpi and SVG/PDF at true size.
   output_dpi: <float>          # Default = not set
+
+  # Draw metadata.title above the diagram in PNG, SVG and PDF output.
+  show_title: <bool>           # Default = false
+
+  # Replace the words "pin", "wire" and "shield" in the diagram and BOM,
+  # e.g. pin: way, wire: core, shield: screen. All entries are optional.
+  terminology:
+    pin: <str>
+    wire: <str>
+    shield: <str>
 ```
 
 
@@ -502,6 +521,8 @@ Alternatively items can be added to just the BOM by putting them in the section 
 Colors are defined via uppercase, two character strings.
 Striped/banded wires can be specified by simply concatenating multiple colors, with no space inbetween, eg. `GNYE` for green-yellow.
 
+A single color can also be given as a CSS/HTML color name such as `tomato` or `lightgreen` (case-insensitive), or as a hex value such as `#ff6347`.
+
 The following colors are understood:
 
 - `BK` ![##000000](https://via.placeholder.com/15/000000/000000?text=+) (black)
@@ -552,6 +573,10 @@ Supported color codes:
 ## Images
 
 Both connectors and cables accept including an image with a caption within their respective nodes.
+
+`src` is a file path, or an embedded image as a data URI (`data:image/png;base64,...`; png, jpeg, gif or webp, up to 10 MB). `.webp` images are converted to PNG before rendering, because many Graphviz builds cannot read them.
+
+To render a file without its images, use `wireviz --disable-key image` (or `--disable-key X1.image` for one component). Any other connector or cable attribute works the same way.
 
 ```yaml
 image: <path>        # short form: only the path to the image file

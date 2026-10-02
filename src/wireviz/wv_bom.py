@@ -109,7 +109,11 @@ def generate_bom(harness: "Harness") -> List[BOMEntry]:
                 "Connector"
                 + (f", {connector.type}" if connector.type else "")
                 + (f", {connector.subtype}" if connector.subtype else "")
-                + (f", {connector.pincount} pins" if connector.show_pincount else "")
+                + (
+                    f", {connector.pincount} {harness.options.terminology.pin}s"
+                    if connector.show_pincount
+                    else ""
+                )
                 + (
                     f", {translate_color(connector.color, harness.options.color_mode)}"
                     if connector.color
@@ -141,9 +145,13 @@ def generate_bom(harness: "Harness") -> List[BOMEntry]:
                     + (
                         f" x {cable.gauge} {cable.gauge_unit}"
                         if cable.gauge
-                        else " wires"
+                        else f" {harness.options.terminology.wire}s"
                     )
-                    + (" shielded" if cable.shield else "")
+                    + (
+                        f" {harness.options.terminology.shield}ed"
+                        if cable.shield
+                        else ""
+                    )
                     + (
                         f", {translate_color(cable.color, harness.options.color_mode)}"
                         if cable.color
@@ -163,7 +171,7 @@ def generate_bom(harness: "Harness") -> List[BOMEntry]:
                 # add each wire from the bundle to the bom
                 for index, color in enumerate(cable.colors):
                     description = (
-                        "Wire"
+                        harness.options.terminology.wire.capitalize()
                         + (f", {cable.type}" if cable.type else "")
                         + (f", {cable.gauge} {cable.gauge_unit}" if cable.gauge else "")
                         + (

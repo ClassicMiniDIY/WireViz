@@ -60,7 +60,12 @@ from wireviz.wv_helper import (
     tuplelist2tsv,
 )
 from wireviz.wv_html import generate_html_output
-from wireviz.wv_safety import UNTRUSTED_RENDER_TIMEOUT, check_dot_images, sanitize_svg
+from wireviz.wv_safety import (
+    UNTRUSTED_RENDER_TIMEOUT,
+    check_dot_images,
+    check_html_label,
+    sanitize_svg,
+)
 
 OLD_CONNECTOR_ATTR = {
     "pinout": "was renamed to 'pinlabels' in v0.2",
@@ -447,7 +452,7 @@ class Harness:
                     [html_line_breaks(connector.type),
                      html_line_breaks(connector.subtype),
                      f'{connector.pincount}-pin' if connector.show_pincount else None,
-                     translate_color(connector.color, self.options.color_mode) if connector.color else None,
+                     html_text(translate_color(connector.color, self.options.color_mode)) if connector.color else None,
                      html_colorbar(connector.color)],
                     '<!-- connector table -->' if connector.style != 'simple' else None,
                     [html_image(connector.image)],
@@ -485,7 +490,7 @@ class Harness:
                     if connector.pincolors:
                         if pincolor in wv_colors._color_hex.keys():
                             # fmt: off
-                            pinhtml.append(f'    <td sides="tbl">{translate_color(pincolor, self.options.color_mode)}</td>')
+                            pinhtml.append(f'    <td sides="tbl">{html_text(translate_color(pincolor, self.options.color_mode))}</td>')
                             pinhtml.append( '    <td sides="tbr">')
                             pinhtml.append( '     <table border="0" cellborder="1"><tr>')
                             pinhtml.append(f'      <td bgcolor="{wv_colors.translate_color(pincolor, "HEX")}" width="8" height="8" fixedsize="true"></td>')
@@ -512,6 +517,8 @@ class Harness:
                 ]
 
             html = "\n".join(html)
+            if self.untrusted:
+                check_html_label(html, f"Connector {connector.name}")
             dot.node(
                 connector.name,
                 label=f"<\n{html}\n>",
@@ -576,10 +583,10 @@ class Harness:
                         cable.spn if not isinstance(cable.spn, list) else None))],
                     [html_line_breaks(cable.type),
                      f'{cable.wirecount}x' if cable.show_wirecount else None,
-                     f'{cable.gauge} {html_text(cable.gauge_unit)}{awg_fmt}' if cable.gauge else None,
+                     f'{html_text(str(cable.gauge))} {html_text(cable.gauge_unit)}{awg_fmt}' if cable.gauge else None,
                      '+ S' if cable.shield else None,
                      f'{cable.length} {html_text(cable.length_unit)}' if cable.length > 0 else None,
-                     translate_color(cable.color, self.options.color_mode) if cable.color else None,
+                     html_text(translate_color(cable.color, self.options.color_mode)) if cable.color else None,
                      html_colorbar(cable.color)],
                     '<!-- wire table -->',
                     [html_image(cable.image)],
@@ -784,6 +791,8 @@ class Harness:
                 else ("filled", self.options.bgcolor_cable)
             )
             html = "\n".join(html)
+            if self.untrusted:
+                check_html_label(html, f"Cable {cable.name}")
             dot.node(
                 cable.name,
                 label=f"<\n{html}\n>",

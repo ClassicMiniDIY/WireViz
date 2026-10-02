@@ -66,6 +66,15 @@ TEMPLATE_NAME_PATTERN = re.compile(r"^[\w-]+$")
 
 SAFE_LINK_SCHEMES = ("http:", "https:", "mailto:")
 
+# Image files allowed in untrusted mode, by extension -> Pillow format.
+_IMAGE_FORMATS = {
+    ".png": "PNG",
+    ".jpg": "JPEG",
+    ".jpeg": "JPEG",
+    ".gif": "GIF",
+    ".webp": "WEBP",
+}
+
 
 def check_untrusted_image(
     src: Union[str, Path], roots: Sequence[Union[str, Path]]
@@ -84,8 +93,17 @@ def check_untrusted_image(
 
     from PIL import Image as PILImage
 
+    fmt = _IMAGE_FORMATS.get(candidate.suffix.lower())
+    if fmt is None:
+        raise ValueError(
+            f"Image {src}: only {', '.join(sorted(_IMAGE_FORMATS))} files are allowed"
+        )
     try:
-        with PILImage.open(candidate) as im:  # reads the header only
+        # formats=[...]: Pillow must not probe other decoders (EPS would
+        # run Ghostscript on the file).
+        with PILImage.open(candidate, formats=[fmt]) as im:  # header only
+            if im.format != fmt:
+                raise ValueError(f"Image {src} is not a {fmt} file")
             pixels = im.width * im.height
     except Exception as exc:
         raise ValueError(f"Image {src} is not a readable image: {exc}") from exc
@@ -118,6 +136,28 @@ def check_dot_images(dot_source: str, generated_tags: Set[str]) -> None:
         raise ValueError(
             "Images may only be added with image: src:, not with <img> in text"
         )
+
+
+def check_html_label(label: str, owner: str) -> None:
+    """Raise ValueError unless ``label`` (the body of a Graphviz HTML-like
+    label) is well-formed and has balanced angle brackets.
+
+    The DOT parser ends an HTML label where its ``<`` and ``>`` count
+    balances, so one unescaped ``>`` in a value would end the label early
+    and turn the rest into raw DOT (which can load files). This is a
+    backstop for untrusted mode behind the escaping of every value.
+    """
+    if label.count("<") != label.count(">"):
+        raise ValueError(f"{owner}: a value contains an unescaped < or >")
+    neutral = re.sub(
+        r"&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);", "&amp;", label
+    )
+    try:
+        ET.fromstring(f"<root>{neutral}</root>")
+    except ET.ParseError as exc:
+        raise ValueError(
+            f"{owner}: the generated label is not well-formed ({exc})"
+        ) from exc
 
 
 def check_template_name(name: str, field: str = "metadata.template.name") -> str:

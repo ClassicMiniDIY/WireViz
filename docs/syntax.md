@@ -93,7 +93,8 @@ tweak:  # optional tweaking of .gv output
 
   # internal shorts / jumpers, e.g. on terminal blocks: each a list of 2+ pins
   # (numbers or labels); optional color as a one-key mapping: {RD: [5, 6]}.
-  # Shorted pins count as populated and are always shown.
+  # Shorted pins count as populated and are always shown. At most 64 shorts
+  # per connector; not shown for style: simple.
   shorts: <List>
 
   # stripping lengths at this connector (shown in the diagram)
@@ -388,7 +389,7 @@ include:              # a file name or a list of file names
   - lib/cables.yml
 ```
 
-- Paths are relative to the including file. The CLI option `-I/--include-path <dir>` (or `parse(include_paths=...)`) adds directories to search after that.
+- Paths are relative to the including file (for stdin or string input without a source path: to the working directory). The CLI option `-I/--include-path <dir>` (or `parse(include_paths=...)`) adds directories to search after that.
 - `connectors` and `cables` are merged by name. A definition in the including file wins over the same name in an included file. The same name in two included files is an error that names both files.
 - `additional_bom_items` from included files are added.
 - `metadata`, `options`, `tweak` and `connections` are allowed only in the main file.

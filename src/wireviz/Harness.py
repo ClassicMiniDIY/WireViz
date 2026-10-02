@@ -214,21 +214,30 @@ def _dot_attr_value(value: str) -> str:
     return '"' + re.sub(r'(?<!\\)"', r'\\"', value) + '"'
 
 
-def short_cells(connector: Connector, pinindex: int) -> List[str]:
-    """Return one table cell per short (upstream #350) for the pin row at
-    ``pinindex``: a solid bar from the first to the last shorted pin, with
-    a dot at each shorted pin."""
-    cells = []
+def short_spans(connector: Connector) -> List[tuple]:
+    """Return (member rows, first row, last row, hex color) for each short
+    of ``connector`` (upstream #350); computed once per connector."""
+    spans = []
     for pins, color in connector.short_groups:
-        rows = [connector.pins.index(pin) for pin in pins]
+        rows = {connector.pins.index(pin) for pin in pins}
         hex_color = get_color_hex(color)[0] if color else "#000000"
+        spans.append((rows, min(rows), max(rows), hex_color))
+    return spans
+
+
+def short_cells(spans: List[tuple], pinindex: int) -> List[str]:
+    """Return one table cell per short for the pin row at ``pinindex``: a
+    solid bar from the first to the last shorted pin, with a dot at each
+    shorted pin."""
+    cells = []
+    for rows, first, last, hex_color in spans:
         if pinindex in rows:
             r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
             dot = "#000000" if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else "#ffffff"
             cells.append(
                 f'    <td border="0" bgcolor="{hex_color}"><font color="{dot}">&#9679;</font></td>'
             )
-        elif min(rows) < pinindex < max(rows):
+        elif first < pinindex < last:
             cells.append(f'    <td border="0" bgcolor="{hex_color}"></td>')
         else:
             cells.append('    <td border="0"></td>')
@@ -498,6 +507,11 @@ class Harness:
         )
 
         for connector in self.connectors.values():
+            if connector.style == "simple" and connector.short_groups:
+                sys.stderr.write(
+                    f"Warning: Connector {connector.name}: shorts are not shown "
+                    "for style: simple\n"
+                )
             # If no wires connected (except maybe loop wires)?
             if not (connector.ports_left or connector.ports_right):
                 connector.ports_left = True  # Use left side pins.
@@ -531,6 +545,7 @@ class Harness:
 
             if connector.style != "simple":
                 pinhtml = []
+                spans = short_spans(connector)
                 pinhtml.append(
                     '<table border="0" cellspacing="0" cellpadding="3" cellborder="1">'
                 )
@@ -553,7 +568,7 @@ class Harness:
                         )
                     # Shorts sit next to the left ports (or first): every row
                     # has those cells, so the short columns line up.
-                    pinhtml.extend(short_cells(connector, pinindex))
+                    pinhtml.extend(short_cells(spans, pinindex))
                     if pinlabel:
                         pinhtml.append(f"    <td>{html_text(pinlabel)}</td>")
                     if connector.pincolors:
@@ -910,6 +925,11 @@ class Harness:
             html = "\n".join(html)
             if self.untrusted and cable.show_box:
                 check_html_label(html, f"Cable {cable.name}")
+            if not cable.show_box and cable.twisted_groups:
+                sys.stderr.write(
+                    f"Warning: Cable {cable.name}: twisted groups are not shown "
+                    "with show_box: false\n"
+                )
             if cable.show_box:
                 dot.node(
                     nohtml(cable.name),
@@ -1287,7 +1307,10 @@ class Harness:
                     outputs["html"] = html_page
                 if "sheet" in fmt:
                     # print-ready PDF of the HTML page (upstream #32, #304)
-                    outputs["sheet"] = html_to_pdf(html_page)
+                    outputs["sheet"] = html_to_pdf(
+                        html_page,
+                        timeout=UNTRUSTED_RENDER_TIMEOUT if self.untrusted else None,
+                    )
 
         return outputs
 

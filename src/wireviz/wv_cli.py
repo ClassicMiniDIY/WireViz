@@ -280,9 +280,18 @@ def wireviz(
                 disable_keys=disable_keys,
                 include_paths=list(include_paths),
             )
-        except (ValueError, TypeError, yaml.YAMLError, FileNotFoundError) as exc:
-            # An error in the input: one clear line, no traceback (#505).
-            if debug:
+        except Exception as exc:
+            # An error in the input or the environment (missing Graphviz or
+            # WeasyPrint): one clear line, no traceback (#505). Anything
+            # else is a bug and keeps its traceback.
+            known = (
+                ValueError,
+                TypeError,
+                yaml.YAMLError,
+                FileNotFoundError,
+                RuntimeError,
+            )
+            if debug or not (isinstance(exc, known) or type(exc) is Exception):
                 raise
             raise click.ClickException(f"{file}: {exc}") from exc
 

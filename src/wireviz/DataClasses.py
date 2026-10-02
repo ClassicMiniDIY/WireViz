@@ -6,7 +6,14 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
 
-from wireviz.wv_colors import COLOR_CODES, Color, ColorMode, Colors, ColorScheme
+from wireviz.wv_colors import (
+    COLOR_CODES,
+    Color,
+    ColorMode,
+    Colors,
+    ColorScheme,
+    get_color_hex,
+)
 from wireviz.wv_helper import aspect_ratio, int2tuple, yaml11_bool
 from wireviz.wv_safety import check_count, check_fontname
 
@@ -46,6 +53,10 @@ MetadataKeys = PlainText  # Literal['title', 'description', 'notes', ...]
 Side = Enum("Side", "LEFT RIGHT")
 
 _BOOL_TYPES = (bool, Optional[bool], Union[bool, Color])
+
+# Most shorts (jumpers) on one connector. Each short is a table column
+# across every pin row, so this bounds the label size.
+MAX_SHORTS = 64
 
 
 def _coerce_bools(obj) -> None:
@@ -371,6 +382,8 @@ class Connector:
             raise TypeError(
                 f"Connector {self.name}: shorts must be a list of pin groups"
             )
+        if len(self.shorts) > MAX_SHORTS:
+            raise ValueError(f"Connector {self.name}: more than {MAX_SHORTS} shorts")
         shorted = set()
         for short in self.shorts:
             color = None
@@ -384,6 +397,11 @@ class Connector:
             if not isinstance(short, list) or len(short) < 2:
                 raise ValueError(
                     f"Connector {self.name}: each short needs a list of 2 or more pins"
+                )
+            if color is not None and any(len(h) != 7 for h in get_color_hex(color)):
+                raise ValueError(
+                    f"Connector {self.name}: short color {color!r} is not a color "
+                    "name or a #rrggbb value"
                 )
             pins = [self.resolve_pin(pin) for pin in short]
             for pin in pins:

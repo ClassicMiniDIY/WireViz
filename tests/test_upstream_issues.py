@@ -944,7 +944,7 @@ def test_issue350_shorted_pins_are_populated_and_visible():
 )
 def test_issue350_short_errors(shorts: str, message: str):
     src = SHORTS.replace("[[L1, L2, L3], {YE: [N, AUX]}]", shorts)
-    with pytest.raises((ValueError, TypeError, Exception), match=message):
+    with pytest.raises((ValueError, TypeError), match=message):
         parse(src, return_types="harness")
 
 
@@ -953,22 +953,18 @@ def test_issue350_short_errors(shorts: str, message: str):
 # ===========================================================================
 
 
-def _weasyprint_available() -> bool:
+@pytest.fixture
+def weasyprint_ok():
+    """Skip unless WeasyPrint and Pango load. Imported in the test, not at
+    collection, so a broken import cannot affect other tests."""
     try:
         import weasyprint  # noqa: F401
-    except Exception:
-        return False
-    return True
+    except Exception as exc:
+        pytest.skip(f"WeasyPrint (wireviz[pdf]) not available: {exc}")
 
 
-needs_weasyprint = pytest.mark.skipif(
-    not _weasyprint_available(), reason="WeasyPrint (wireviz[pdf]) not available"
-)
-
-
-@needs_weasyprint
 @pytest.mark.parametrize("sheetsize", ["A4", "A3", "A2"])
-def test_issue32_sheet_pdf_page_size(tmp_path: Path, sheetsize: str):
+def test_issue32_sheet_pdf_page_size(tmp_path: Path, sheetsize: str, weasyprint_ok):
     """One page at the template's sheet size (frame + margins)."""
     import weasyprint
 
@@ -986,8 +982,7 @@ def test_issue32_sheet_pdf_page_size(tmp_path: Path, sheetsize: str):
     assert size == {"A4": (210, 297), "A3": (420, 297), "A2": (594, 420)}[sheetsize]
 
 
-@needs_weasyprint
-def test_issue32_sheet_pdf_untrusted_and_no_external_fetch():
+def test_issue32_sheet_pdf_untrusted_and_no_external_fetch(weasyprint_ok):
     src = (
         "metadata:\n  title: '<img src=\"http://example.invalid/x.png\">T'\n" + MINIMAL
     )
@@ -1017,3 +1012,160 @@ def test_issue32_sheet_cli_code():
     from wireviz.wv_cli import format_codes
 
     assert format_codes["D"] == "sheet" and format_codes["P"] == "pdf"
+
+
+# ---------------------------------------------------------------------------
+# Batch C review round 1
+# ---------------------------------------------------------------------------
+
+
+def test_review_c_sheet_keeps_inline_images(weasyprint_ok, tmp_path: Path):
+    """data: images inside the SVG must reach the PDF (the fetcher used to
+    refuse them and WeasyPrint dropped the rest of the diagram)."""
+    import weasyprint
+
+    from wireviz.wv_sheet import html_to_pdf
+
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    src = "connectors:\n  X1: {pincount: 1, image: pic.png}\nconnections: [[X1]]\n"
+    html = parse(src, return_types="harness", image_paths=[tmp_path])._render(
+        ("html",)
+    )["html"]
+    assert html_to_pdf(html).startswith(b"%PDF")
+    images = []
+    page = weasyprint.HTML(string=html).render().pages[0]
+
+    def walk(box):
+        if type(box).__name__ in ("InlineReplacedBox", "BlockReplacedBox"):
+            images.append(box)
+        for child in getattr(box, "children", []) or []:
+            walk(child)
+
+    walk(page._page_box)
+    assert images  # the SVG is laid out as a replaced box
+    from weasyprint.urls import URLFetcher
+
+    fetched = []
+    original = URLFetcher.fetch
+
+    def spy(self, url, *a, **k):
+        fetched.append(url[:10])
+        return original(self, url, *a, **k)
+
+    import unittest.mock as mock
+
+    with mock.patch.object(URLFetcher, "fetch", spy):
+        html_to_pdf(html)
+    assert fetched and all(u.startswith("data:") for u in fetched)
+
+
+def test_review_c_sheet_never_fetches_files(weasyprint_ok, monkeypatch):
+    import urllib.request
+
+    from wireviz.wv_sheet import html_to_pdf
+
+    def refuse(*a, **k):
+        raise AssertionError("WeasyPrint tried to open a URL")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    html = '<html><body><img src="file:///etc/hosts"><img src="http://example.invalid/x.png"></body></html>'
+    assert html_to_pdf(html).startswith(b"%PDF")
+
+
+def test_review_c_untrusted_sheet_runs_with_timeout(weasyprint_ok, monkeypatch):
+    import wireviz.Harness as H
+
+    h = parse(MINIMAL, return_types="harness", untrusted=True)
+    assert h._render(("sheet",))["sheet"].startswith(b"%PDF")
+    monkeypatch.setattr(H, "UNTRUSTED_RENDER_TIMEOUT", 0.000001)
+    with pytest.raises(RuntimeError, match="did not finish"):
+        parse(MINIMAL, return_types="harness", untrusted=True)._render(("sheet",))
+
+
+def test_review_c_shorts_cap_and_color():
+    many = ", ".join(f"[{2 * i + 1}, {2 * i + 2}]" for i in range(65))
+    src = (
+        f"connectors:\n  X1: {{pincount: 130, shorts: [{many}]}}\nconnections: [[X1]]\n"
+    )
+    with pytest.raises(ValueError, match="more than 64 shorts"):
+        parse(src, return_types="harness")
+    src = "connectors:\n  X1: {pincount: 2, shorts: [{'#abc': [1, 2]}]}\nconnections: [[X1]]\n"
+    with pytest.raises(ValueError, match="not a color name or a #rrggbb"):
+        parse(src, return_types="harness")
+
+
+def test_review_c_diamond_include(tmp_path: Path):
+    _write(tmp_path / "common.yml", "connectors:\n  TERM: {pincount: 1}\n")
+    _write(
+        tmp_path / "a.yml", "include: [common.yml]\nconnectors:\n  XA: {pincount: 1}\n"
+    )
+    _write(
+        tmp_path / "b.yml", "include: [common.yml]\nconnectors:\n  XB: {pincount: 1}\n"
+    )
+    main = _write(
+        tmp_path / "m.yml",
+        "include: [a.yml, b.yml]\nconnections: [[TERM], [XA], [XB]]\n",
+    )
+    assert set(parse(main, return_types="harness").connectors) == {"TERM", "XA", "XB"}
+    _write(tmp_path / "c.yml", "connectors:\n  TERM: {pincount: 2}\n")
+    clash = _write(tmp_path / "n.yml", "include: [a.yml, c.yml]\nconnections: []\n")
+    with pytest.raises(ValueError, match=r"defined in both .*common\.yml and .*c\.yml"):
+        parse(clash, return_types="harness")
+
+
+def test_review_c_include_non_utf8_names_the_file(tmp_path: Path):
+    (tmp_path / "lib.yml").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe")
+    main = _write(tmp_path / "m.yml", "include: [lib.yml]\n")
+    with pytest.raises(ValueError, match="lib.yml: not a UTF-8"):
+        parse(main, return_types="harness")
+
+
+def test_review_c_bare_reference_to_template_instance():
+    src = """
+connectors: {X1: {pincount: 5}, X2: {pincount: 5}}
+cables: {W: {}}
+connections:
+  - - X1: [1-2]
+    - W.W1
+    - X2: [1-2]
+  - - X1: [5]
+    - W1: [5]
+    - X2: [5]
+"""
+    h = parse(src, return_types="harness")
+    assert h.cables["W1"].wirecount == 5
+
+
+def test_review_c_bare_cable_hint_and_prepass_context():
+    src = """
+connectors: {X1: {pincount: 3}, X2: {pincount: 3}}
+cables: {W1: {colors: [RD, BK]}}
+connections:
+  - - X1: [1-3]
+    - W1
+    - X2: [1-3]
+"""
+    with pytest.raises(ValueError, match="cable named alone uses wires 1..n"):
+        parse(src, return_types="harness")
+    bad = "connectors: {X1: {pincount: 1}}\ncables: {W1: {}}\nconnections:\n  - - X1: {a: 1}\n    - W1\n"
+    with pytest.raises(Exception, match="connection set 1"):
+        parse(bad, return_types="harness")
+
+
+def test_review_c_cli_one_line_for_missing_weasyprint(
+    runner, tmp_path: Path, monkeypatch
+):
+    import wireviz.wv_sheet as ws
+    from wireviz.wv_cli import wireviz as cli
+
+    def missing():
+        raise ws.SheetPdfUnavailable('needs WeasyPrint: pip install "wireviz[pdf]"')
+
+    monkeypatch.setattr(ws, "_weasyprint", missing)
+    f = _write(tmp_path / "h.yml", MINIMAL)
+    result = runner.invoke(cli, ["-f", "D", str(f)])
+    assert result.exit_code == 1
+    assert (
+        'pip install "wireviz[pdf]"' in result.stderr
+        and "Traceback" not in result.stderr
+    )

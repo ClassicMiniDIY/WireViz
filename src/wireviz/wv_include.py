@@ -18,6 +18,7 @@ file at dict level:
 YAML anchors and ``<<:`` do not cross files.
 """
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Union
 
@@ -33,13 +34,16 @@ def resolve_includes(
     base_dir: Path,
     include_paths: Sequence[Union[str, Path]] = (),
     _stack: Optional[List[Path]] = None,
-) -> List[Path]:
+) -> Dict[tuple, Path]:
     """Merge the files named in ``yaml_data["include"]`` into ``yaml_data``
-    (in place) and return every file that was read."""
+    (in place). Return {(section, key): file that defines it} for every
+    merged entry, so the caller can tell a real conflict from the same
+    file reached twice (a "diamond": a.yml and b.yml both include
+    common.yml)."""
     stack = _stack or []
     includes = yaml_data.pop("include", None)
     if includes is None:
-        return []
+        return {}
     if isinstance(includes, str):
         includes = [includes]
     if not isinstance(includes, list) or not all(isinstance(i, str) for i in includes):
@@ -49,17 +53,22 @@ def resolve_includes(
             f"include: nesting is deeper than {MAX_INCLUDE_DEPTH} levels ({stack[-1]})"
         )
 
+    seen_files = set()
     main_keys = {
         section: set(yaml_data.get(section) or {}) for section in MERGED_SECTIONS
     }
-    origin = {section: {} for section in MERGED_SECTIONS}  # key -> included file
-    read = []
+    origin: Dict[tuple, Path] = {}  # (section, key) -> defining file
     for name in includes:
         path = _find(name, base_dir, include_paths)
-        if path in stack:
-            chain = " -> ".join(str(p) for p in [*stack, path])
+        real = path.resolve()
+        if real in stack:
+            chain = " -> ".join(str(p) for p in [*stack, real])
             raise ValueError(f"include: cycle {chain}")
-        data = yaml_load(file_read_text(path))
+        try:
+            text = file_read_text(path)
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"include {path}: not a UTF-8 YAML file") from exc
+        data = yaml_load(text)
         if data is None:
             data = {}
         if not isinstance(data, dict):
@@ -69,8 +78,7 @@ def resolve_includes(
                 raise ValueError(
                     f"include {path}: {section} is allowed only in the main file"
                 )
-        read.append(path)
-        read += resolve_includes(data, path.parent, include_paths, [*stack, path])
+        nested = resolve_includes(data, path.parent, include_paths, [*stack, real])
         _absolute_images(data, path.parent)
 
         for section in MERGED_SECTIONS:
@@ -83,19 +91,25 @@ def resolve_includes(
             for key, attribs in entries.items():
                 if key in main_keys[section]:
                     continue  # the including file wins
-                if key in origin[section]:
+                defined_in = nested.get((section, key), real)
+                if (section, key) in origin:
+                    if origin[(section, key)] == defined_in:
+                        continue  # the same file reached twice
                     raise ValueError(
                         f"include: {section}.{key} is defined in both "
-                        f"{origin[section][key]} and {path}"
+                        f"{origin[(section, key)]} and {defined_in}"
                     )
-                origin[section][key] = path
+                origin[(section, key)] = defined_in
                 target[key] = attribs
         extra = data.get("additional_bom_items") or []
+        if real in seen_files:
+            extra = []  # a file reached twice adds its BOM items once
+        seen_files.add(real)
         if extra:
             yaml_data["additional_bom_items"] = list(
                 yaml_data.get("additional_bom_items") or []
             ) + list(extra)
-    return read
+    return origin
 
 
 def _find(name: str, base_dir: Path, include_paths) -> Path:
@@ -108,7 +122,9 @@ def _find(name: str, base_dir: Path, include_paths) -> Path:
         ]
     for path in roots:
         if path.is_file():
-            return path.resolve()
+            # absolute, but not resolved: relative paths inside a symlinked
+            # file stay relative to the link's directory
+            return Path(os.path.abspath(path))
     searched = "\n".join(str(p) for p in roots)
     raise FileNotFoundError(f"include {name} was not found. Searched:\n{searched}")
 

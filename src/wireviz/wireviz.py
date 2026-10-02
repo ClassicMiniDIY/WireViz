@@ -142,6 +142,7 @@ def parse(
     return_types = tuple(t.lower() for t in return_types or ())
 
     yaml_data, yaml_file, yaml_str = _get_yaml_data_and_path(inp, untrusted)
+    include_snapshot = None
     if yaml_data is None:
         raise ValueError("The input is empty: it holds no YAML content")
     if not isinstance(yaml_data, dict):
@@ -163,8 +164,8 @@ def parse(
         resolve_includes(
             yaml_data, base.parent if base else Path.cwd(), list(include_paths or [])
         )
-        # A PNG must be self-contained: embed the merged YAML.
-        yaml_str = _yaml_source(yaml_data, None)
+        # A PNG must be self-contained: it embeds the merged YAML.
+        include_snapshot = copy.deepcopy(yaml_data)
     if disable_keys:
         _disable_keys(yaml_data, disable_keys)
     # When inp was a Path, derive source_path automatically so callers
@@ -292,7 +293,7 @@ def parse(
                 yaml_data[sec] = []
 
     connection_sets = yaml_data["connections"]
-    implied_wirecounts = _implied_wirecounts(
+    implied_wirecounts, cable_instances = _implied_wirecounts(
         connection_sets, template_cables, harness.options.template_separator
     )
 
@@ -347,6 +348,7 @@ def parse(
 
     for set_number, connection_set in enumerate(connection_sets, start=1):
         set_label = _describe_set(connection_set)  # before the set is rewritten
+        bare_cables = set()  # cables named alone in this set (#508)
         try:
             # The steps below rewrite the set in place. A YAML alias (*name)
             # makes several sets share one list, so work on a private copy.
@@ -387,9 +389,11 @@ def parse(
                     template_name, sep, designator_name = entry.partition(
                         template_separator_char
                     )
-                    if template_name in template_cables and (
-                        not sep or designator_name
-                    ):
+                    if (
+                        template_name in template_cables
+                        and (not sep or designator_name)
+                    ) or (not sep and entry in cable_instances):
+                        bare_cables.add(designator_name or entry)
                         # a bare named cable uses wires 1..n (upstream #508)
                         connection_set[index] = {
                             entry: list(range(1, connectioncount + 1))
@@ -535,15 +539,27 @@ def parse(
                             harness.add_mate_component(from_name, to_name, designator)
         except Exception as exc:
             # Name the connection set (upstream #505, #207). Input errors
-            # keep their class; anything else becomes a WireVizError.
-            context = f"connection set {set_number} ({set_label})"
-            cls = (
-                type(exc) if isinstance(exc, (ValueError, TypeError)) else WireVizError
-            )
+            # (ValueError, TypeError, plain Exception) get the context and
+            # keep their class (plain Exception becomes WireVizError);
+            # anything else is a bug and passes through unchanged.
+            if (
+                not isinstance(exc, (ValueError, TypeError))
+                and type(exc) is not Exception
+            ):
+                raise
+            message = f"connection set {set_number} ({set_label}): {exc}"
+            if "out of range" in str(exc) and any(
+                str(exc).startswith(f"{c}:") for c in bare_cables
+            ):
+                message += (
+                    " (a cable named alone uses wires 1..n since #508; "
+                    "list the wires, e.g. W1: [1, 1, 1], for the old meaning)"
+                )
+            cls = WireVizError if type(exc) is Exception else type(exc)
             try:
-                error = cls(f"{context}: {exc}")
+                error = cls(message)
             except Exception:  # an exception class with a special signature
-                error = WireVizError(f"{context}: {exc}")
+                error = WireVizError(message)
             raise error from exc
 
     # Auto-instantiate any declared connector that has loops but was not
@@ -593,7 +609,13 @@ def parse(
     # Only build the YAML text for the PNG chunk when a PNG is produced.
     wants_png = "png" in (output_formats or ()) or "png" in return_types
     yaml_source_for_png = (
-        _yaml_source(inp, yaml_str) if embed_yaml and wants_png else None
+        (
+            _yaml_source(include_snapshot, None)
+            if include_snapshot is not None
+            else _yaml_source(inp, yaml_str)
+        )
+        if embed_yaml and wants_png
+        else None
     )
     if output_formats:
         if write_to_stdout:
@@ -649,12 +671,37 @@ def _describe_set(connection_set) -> str:
     return " → ".join(names)
 
 
-def _implied_wirecounts(connection_sets, template_cables: Dict, separator: str) -> Dict:
-    """Return {cable designator: wire count} for cables that have neither
-    wirecount nor colors, from the wire numbers used for them (upstream
-    #508). A bare named cable in a set of n connections uses wires 1..n.
-    Autogenerated instances (``W.``) are counted where they are created."""
-    implied = {}
+def _implied_wirecounts(connection_sets, template_cables: Dict, separator: str):
+    """Return ({cable designator: wire count}, {instance designator:
+    template}) for cables that have neither wirecount nor colors (upstream
+    #508): the count is the highest wire number used for the designator,
+    or n for a cable named alone in a set of n connections. Autogenerated
+    instances (``W.``) are counted where they are created. Malformed
+    entries are skipped here; the main loop reports them with context."""
+    sets = [s for s in connection_sets if isinstance(s, list)]
+
+    # every named cable instance (T.D) -> its template, over all sets
+    instances = {}
+    for connection_set in sets:
+        for entry in connection_set:
+            names = (
+                [entry]
+                if isinstance(entry, str)
+                else (
+                    list(entry)
+                    if isinstance(entry, dict)
+                    else (
+                        [e for e in entry if isinstance(e, str)]
+                        if isinstance(entry, list)
+                        else []
+                    )
+                )
+            )
+            for name in names:
+                if isinstance(name, str) and separator in name:
+                    template, _, designator = name.partition(separator)
+                    if designator and template in template_cables:
+                        instances[designator] = template
 
     def designator_of(name):
         if not isinstance(name, str):
@@ -662,36 +709,42 @@ def _implied_wirecounts(connection_sets, template_cables: Dict, separator: str) 
         if separator in name:
             template, _, designator = name.partition(separator)
             return (template, designator) if designator else (None, None)
-        return name, name
+        if name in template_cables:
+            return name, name
+        return instances.get(name), name
 
-    for connection_set in connection_sets:
-        if not isinstance(connection_set, list):
+    implied = {}
+    for connection_set in sets:
+        try:
+            counts = [
+                len(e) if isinstance(e, list) else len(expand(list(e.values())[0]))
+                for e in connection_set
+                if isinstance(e, (list, dict)) and e
+            ]
+        except (ValueError, TypeError):
             continue
-        counts = [
-            len(e) if isinstance(e, list) else len(expand(list(e.values())[0]))
-            for e in connection_set
-            if isinstance(e, (list, dict)) and e
-        ]
         n = max(counts) if counts else 1
         for entry in connection_set:
             if isinstance(entry, str):
-                template, designator, wires = *designator_of(entry), list(
-                    range(1, n + 1)
-                )
+                template, designator = designator_of(entry)
+                wires = list(range(1, n + 1))
             elif isinstance(entry, dict) and len(entry) == 1:
                 key, value = next(iter(entry.items()))
                 template, designator = designator_of(key)
-                wires = [w for w in expand(value) if isinstance(w, int)]
+                try:
+                    wires = [w for w in expand(value) if isinstance(w, int)]
+                except (ValueError, TypeError):
+                    continue
             else:
                 continue
             attribs = template_cables.get(template)
-            if designator is None or attribs is None:
+            if designator is None or not isinstance(attribs, dict):
                 continue
             if attribs.get("wirecount") or attribs.get("colors"):
                 continue
             if wires:
                 implied[designator] = max(implied.get(designator, 0), max(wires))
-    return implied
+    return implied, instances
 
 
 def _disable_keys(yaml_data: Dict, keys) -> None:

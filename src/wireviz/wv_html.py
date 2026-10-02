@@ -145,9 +145,11 @@ def generate_html_output(
         "<!-- %template_sheetsize% -->": clean(
             (metadata.get("template") or {}).get("sheetsize") or "A4"
         ),
-        "<!-- %date% -->": date.today().isoformat(),
         "<!-- %revision% -->": clean(_latest_revision(metadata)),
     }
+
+    if not (metadata and "date" in metadata):  # metadata.date wins
+        replacements["<!-- %date% -->"] = date.today().isoformat()
 
     def replacement_if_used(key: str, func: Callable[[], str]) -> None:
         """Append replacement only if used in html."""

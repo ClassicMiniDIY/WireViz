@@ -39,6 +39,7 @@ from wireviz.wv_bom import (
     pn_info_string,
 )
 from wireviz.wv_colors import get_color_hex, translate_color
+from wireviz.wv_errors import WireVizRenderError
 from wireviz.wv_gv_html import (
     html_bgcolor,
     html_bgcolor_attr,
@@ -212,6 +213,12 @@ def _dot_attr_value(value: str) -> str:
     if (len(value) - len(value.rstrip("\\"))) % 2:
         value += "\\"
     return '"' + re.sub(r'(?<!\\)"', r'\\"', value) + '"'
+
+
+# Upper bound for pins x shorts summed over all connectors: each short adds
+# a table cell to every pin row, so YAML aliases could otherwise multiply a
+# few hundred bytes into hundreds of MB of DOT source.
+MAX_SHORT_CELLS = 100_000
 
 
 def short_spans(connector: Connector) -> List[tuple]:
@@ -506,6 +513,15 @@ class Harness:
             for colorstr in cable.colors
         )
 
+        short_cells_total = sum(
+            len(c.pins) * len(c.short_groups) for c in self.connectors.values()
+        )
+        if short_cells_total > MAX_SHORT_CELLS:
+            # each short is a column over every pin row (#350)
+            raise ValueError(
+                f"shorts: pins x shorts over all connectors is {short_cells_total}; "
+                f"the limit is {MAX_SHORT_CELLS}"
+            )
         for connector in self.connectors.values():
             if connector.style == "simple" and connector.short_groups:
                 sys.stderr.write(
@@ -1080,11 +1096,11 @@ class Harness:
                 timeout=UNTRUSTED_RENDER_TIMEOUT,
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
+            raise WireVizRenderError(
                 f"Graphviz did not finish within {UNTRUSTED_RENDER_TIMEOUT} s"
             ) from exc
         if result.returncode != 0:
-            raise RuntimeError(
+            raise WireVizRenderError(
                 "Graphviz failed: " + result.stderr.decode("utf-8", "replace").strip()
             )
         return result.stdout

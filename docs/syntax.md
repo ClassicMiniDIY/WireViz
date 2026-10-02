@@ -393,7 +393,7 @@ include:              # a file name or a list of file names
 - `connectors` and `cables` are merged by name. A definition in the including file wins over the same name in an included file. The same name in two included files is an error that names both files.
 - `additional_bom_items` from included files are added.
 - `metadata`, `options`, `tweak` and `connections` are allowed only in the main file.
-- Included files may include other files. A loop of includes is an error.
+- Included files may include other files. A loop of includes is an error. A file reached through two includes is merged once. If one included file overrides a name from a shared file that another include also uses, that is a conflict: move the override to the main file.
 - A relative `image: src:` in an included file is relative to that file.
 - Each file is read on its own, so YAML anchors (`&name`, `*name`, `<<:`) do not work across files.
 - A PNG output embeds the merged YAML, so it does not depend on the library files.

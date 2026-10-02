@@ -1059,17 +1059,32 @@ def test_review_c_sheet_keeps_inline_images(weasyprint_ok, tmp_path: Path):
     assert fetched and all(u.startswith("data:") for u in fetched)
 
 
-def test_review_c_sheet_never_fetches_files(weasyprint_ok, monkeypatch):
-    import urllib.request
+def test_review_c_sheet_never_fetches_files(weasyprint_ok):
+    """Only data: URLs may be fetched; file: and http: are refused by the
+    fetcher itself (spied, not inferred from the output)."""
+    import unittest.mock as mock
+
+    from weasyprint.urls import URLFetcher
 
     from wireviz.wv_sheet import html_to_pdf
 
-    def refuse(*a, **k):
-        raise AssertionError("WeasyPrint tried to open a URL")
+    calls = []
+    original = URLFetcher.fetch
 
-    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    def spy(self, url, *a, **k):
+        try:
+            result = original(self, url, *a, **k)
+        except Exception:
+            calls.append((url.split(":")[0], "refused"))
+            raise
+        calls.append((url.split(":")[0], "fetched"))
+        return result
+
     html = '<html><body><img src="file:///etc/hosts"><img src="http://example.invalid/x.png"></body></html>'
-    assert html_to_pdf(html).startswith(b"%PDF")
+    with mock.patch.object(URLFetcher, "fetch", spy):
+        assert html_to_pdf(html).startswith(b"%PDF")
+    assert ("file", "fetched") not in calls and ("http", "fetched") not in calls
+    assert ("file", "refused") in calls
 
 
 def test_review_c_untrusted_sheet_runs_with_timeout(weasyprint_ok, monkeypatch):
@@ -1169,3 +1184,97 @@ def test_review_c_cli_one_line_for_missing_weasyprint(
         'pip install "wireviz[pdf]"' in result.stderr
         and "Traceback" not in result.stderr
     )
+
+
+# ---------------------------------------------------------------------------
+# Batch C review round 2
+# ---------------------------------------------------------------------------
+
+
+def test_review_c2_sheet_child_ignores_cwd_package(
+    weasyprint_ok, tmp_path: Path, monkeypatch
+):
+    """The untrusted sheet child must import this wireviz, not a package
+    named wireviz in the working directory."""
+    fake = tmp_path / "wireviz"
+    fake.mkdir()
+    (fake / "__init__.py").write_text("")
+    (fake / "wv_sheet.py").write_text(
+        "import sys\ndef _main():\n    sys.stdout.write('%PDF-fake')\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    h = parse(MINIMAL, return_types="harness", untrusted=True)
+    pdf = h._render(("sheet",))["sheet"]
+    assert pdf.startswith(b"%PDF-1") and b"fake" not in pdf
+
+
+@pytest.mark.parametrize(
+    "connections, message",
+    [
+        ("[[X1: [1], {}, X2: [1]]]", "exactly one designator"),
+        ("[{X1: [1]}]", "a connection set must be a list"),
+        ("[[X1: [1], [], X2: [1]]]", "empty list"),
+    ],
+)
+def test_review_c2_malformed_connection_sets(connections: str, message: str):
+    src = f"connectors: {{X1: {{pincount: 1}}, X2: {{pincount: 1}}}}\nconnections: {connections}\n"
+    with pytest.raises(ValueError, match=f"connection set 1 .*{message}"):
+        parse(src, return_types="harness")
+
+
+def test_review_c2_shorts_cell_budget():
+    shorts = ", ".join(f"[{2 * i + 1}, {2 * i + 2}]" for i in range(64))
+    entries = "\n".join(f"  X{i}: *c" for i in range(2, 10))
+    src = (
+        f"connectors:\n  X1: &c {{pincount: 2000, shorts: [{shorts}]}}\n{entries}\n"
+        "connections: [[X1]]\n"
+    )
+    h = parse(src, return_types="harness")
+    with pytest.raises(ValueError, match="pins x shorts"):
+        h.graph
+
+
+def test_review_c2_diamond_include_bom_items_once(tmp_path: Path):
+    _write(
+        tmp_path / "common.yml",
+        "additional_bom_items:\n  - {description: Common item, qty: 1}\n",
+    )
+    _write(tmp_path / "b.yml", "include: [common.yml]\n")
+    _write(tmp_path / "c.yml", "include: [common.yml]\n")
+    main = _write(
+        tmp_path / "m.yml",
+        "include: [b.yml, c.yml]\nconnectors: {X1: {pincount: 1}}\nconnections: [[X1]]\n",
+    )
+    h = parse(main, return_types="harness")
+    assert [i["description"] for i in h.additional_bom_items] == ["Common item"]
+
+
+def test_review_c2_bare_string_instance_reference():
+    src = """
+connectors: {X1: {pincount: 3}, X2: {pincount: 3}}
+cables: {K: {}}
+connections:
+  - - X1: [1]
+    - K.K1: [1]
+    - X2: [1]
+  - - X1: [1-3]
+    - K1
+    - X2: [1-3]
+"""
+    h = parse(src, return_types="harness")
+    assert h.cables["K1"].wirecount == 3
+    assert [c.via_port for c in h.cables["K1"].connections] == [1, 1, 2, 3]
+
+
+@pytest.mark.parametrize(
+    "value, shown", [("2024-01-02", "2024-01-02"), ("'v2'", "v2"), ("null", None)]
+)
+def test_review_c2_date_placeholder(tmp_path: Path, value: str, shown):
+    from datetime import date
+
+    (tmp_path / "t.html").write_text("<html><body>[<!-- %date% -->]</body></html>")
+    src = f"metadata: {{date: {value}, template: {{name: t}}}}\nconnectors: {{X1: {{pincount: 1}}}}\nconnections: [[X1]]\n"
+    page = parse(src, return_types="harness", source_path=tmp_path / "x.yml")._render(
+        ("html",), template_dir=tmp_path
+    )["html"]
+    assert f"[{shown or date.today().isoformat()}]" in page

@@ -10,9 +10,12 @@ import yaml
 if __name__ == "__main__":
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from graphviz import ExecutableNotFound
+
 import wireviz.wireviz as wv
 from wireviz import APP_NAME, __version__
 from wireviz.Harness import read_yaml_from_png
+from wireviz.wv_errors import WireVizRenderError
 from wireviz.wv_helper import file_read_text
 
 format_codes = {
@@ -289,7 +292,8 @@ def wireviz(
                 TypeError,
                 yaml.YAMLError,
                 FileNotFoundError,
-                RuntimeError,
+                WireVizRenderError,  # Graphviz/WeasyPrint failed or is missing
+                ExecutableNotFound,  # Graphviz not installed
             )
             if debug or not (isinstance(exc, known) or type(exc) is Exception):
                 raise

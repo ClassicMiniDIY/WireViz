@@ -18,8 +18,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from wireviz.wv_errors import WireVizRenderError
 
-class SheetPdfUnavailable(RuntimeError):
+
+class SheetPdfUnavailable(WireVizRenderError):
     """WeasyPrint is not installed or cannot load its system libraries."""
 
 
@@ -41,36 +43,47 @@ def _render(html: str) -> bytes:
     return weasyprint.HTML(string=html, url_fetcher=fetcher).write_pdf()
 
 
+def _limit_memory() -> None:  # runs in the child before exec (POSIX)
+    try:
+        import resource
+
+        limit = 2 * 1024**3
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+    except Exception:
+        pass  # not supported on this platform (e.g. macOS); timeout still applies
+
+
 def html_to_pdf(html: str, timeout: Optional[float] = None) -> bytes:
     """Render the WireViz HTML output to a PDF document."""
     if timeout is None:
         return _render(html)
     _weasyprint()  # fail early, with the install hint, in this process
-    # The child must import this same wireviz package.
+    # -c, with sys.path[0] set to this package's root: "python -m" would put
+    # the working directory first and could import a different "wireviz".
     package_root = str(Path(__file__).resolve().parent.parent)
-    env = {
-        **os.environ,
-        "PYTHONPATH": os.pathsep.join(
-            p for p in (package_root, os.environ.get("PYTHONPATH")) if p
-        ),
-    }
+    code = (
+        "import sys; sys.path[0] = " + repr(package_root) + "; "
+        "from wireviz.wv_sheet import _main; _main()"
+    )
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "wireviz.wv_sheet"],
+            [sys.executable, "-c", code],
             input=html.encode("utf-8"),
             capture_output=True,
             timeout=timeout,
-            env=env,
+            preexec_fn=_limit_memory if os.name == "posix" else None,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"The sheet PDF did not finish within {timeout} s") from exc
+        raise WireVizRenderError(
+            f"The sheet PDF did not finish within {timeout} s"
+        ) from exc
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
-        raise RuntimeError(
+        raise WireVizRenderError(
             "The sheet PDF failed" + (f": {detail[-1]}" if detail else "")
         )
     return result.stdout
 
 
-if __name__ == "__main__":  # child process for html_to_pdf(timeout=...)
+def _main() -> None:  # child process for html_to_pdf(timeout=...)
     sys.stdout.buffer.write(_render(sys.stdin.buffer.read().decode("utf-8")))

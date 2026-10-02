@@ -34,6 +34,7 @@ def resolve_includes(
     base_dir: Path,
     include_paths: Sequence[Union[str, Path]] = (),
     _stack: Optional[List[Path]] = None,
+    _seen: Optional[set] = None,
 ) -> Dict[tuple, Path]:
     """Merge the files named in ``yaml_data["include"]`` into ``yaml_data``
     (in place). Return {(section, key): file that defines it} for every
@@ -53,7 +54,7 @@ def resolve_includes(
             f"include: nesting is deeper than {MAX_INCLUDE_DEPTH} levels ({stack[-1]})"
         )
 
-    seen_files = set()
+    seen = _seen if _seen is not None else set()  # files whose BOM items are in
     main_keys = {
         section: set(yaml_data.get(section) or {}) for section in MERGED_SECTIONS
     }
@@ -69,6 +70,10 @@ def resolve_includes(
         except UnicodeDecodeError as exc:
             raise ValueError(f"include {path}: not a UTF-8 YAML file") from exc
         data = yaml_load(text)
+        if isinstance(data, dict) and real in seen:
+            # reached before (a diamond): its BOM items are already in
+            data["additional_bom_items"] = []
+        seen.add(real)
         if data is None:
             data = {}
         if not isinstance(data, dict):
@@ -78,7 +83,9 @@ def resolve_includes(
                 raise ValueError(
                     f"include {path}: {section} is allowed only in the main file"
                 )
-        nested = resolve_includes(data, path.parent, include_paths, [*stack, real])
+        nested = resolve_includes(
+            data, path.parent, include_paths, [*stack, real], seen
+        )
         _absolute_images(data, path.parent)
 
         for section in MERGED_SECTIONS:
@@ -102,9 +109,6 @@ def resolve_includes(
                 origin[(section, key)] = defined_in
                 target[key] = attribs
         extra = data.get("additional_bom_items") or []
-        if real in seen_files:
-            extra = []  # a file reached twice adds its BOM items once
-        seen_files.add(real)
         if extra:
             yaml_data["additional_bom_items"] = list(
                 yaml_data.get("additional_bom_items") or []

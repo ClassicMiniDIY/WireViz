@@ -148,9 +148,6 @@ def generate_html_output(
         "<!-- %revision% -->": clean(_latest_revision(metadata)),
     }
 
-    if not (metadata and "date" in metadata):  # metadata.date wins
-        replacements["<!-- %date% -->"] = date.today().isoformat()
-
     def replacement_if_used(key: str, func: Callable[[], str]) -> None:
         """Append replacement only if used in html."""
         if key in html:
@@ -173,6 +170,8 @@ def generate_html_output(
             # attribute or style contexts in the templates.
             if untrusted and f"<!-- %{item}% -->" in replacements:
                 continue
+            if isinstance(contents, date):  # an unquoted YAML date
+                contents = contents.isoformat()
             if isinstance(contents, (str, int, float)):
                 replacements[f"<!-- %{item}% -->"] = clean(
                     html_line_breaks(str(contents))
@@ -189,6 +188,9 @@ def generate_html_output(
                             )
                     elif isinstance(entry, (str, int, float)):
                         pass  # TODO?: replacements[f"<!-- %{item}_{category}% -->"] = html_line_breaks(str(entry))
+
+    # metadata.date (if it gave a value) wins over today's date
+    replacements.setdefault("<!-- %date% -->", date.today().isoformat())
 
     # perform replacements
     # regex replacement adapted from:

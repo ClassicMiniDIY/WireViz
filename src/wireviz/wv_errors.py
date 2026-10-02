@@ -9,3 +9,7 @@ class WireVizError(ValueError):
     Input errors that are already a ValueError or TypeError keep their
     class; the connection-set context is added to their message.
     """
+
+
+class WireVizRenderError(RuntimeError):
+    """An external renderer (Graphviz, WeasyPrint) failed or timed out."""

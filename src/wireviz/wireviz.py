@@ -350,6 +350,16 @@ def parse(
         set_label = _describe_set(connection_set)  # before the set is rewritten
         bare_cables = set()  # cables named alone in this set (#508)
         try:
+            if not isinstance(connection_set, list):
+                raise ValueError("a connection set must be a list")
+            for entry in connection_set:
+                if isinstance(entry, dict) and len(entry) != 1:
+                    raise ValueError(
+                        "each mapping in a connection set needs exactly one "
+                        f"designator, not {len(entry)}"
+                    )
+                if isinstance(entry, list) and not entry:
+                    raise ValueError("a connection set entry is an empty list")
             # The steps below rewrite the set in place. A YAML alias (*name)
             # makes several sets share one list, so work on a private copy.
             connection_set = copy.deepcopy(connection_set)
@@ -548,12 +558,11 @@ def parse(
             ):
                 raise
             message = f"connection set {set_number} ({set_label}): {exc}"
-            if "out of range" in str(exc) and any(
-                str(exc).startswith(f"{c}:") for c in bare_cables
-            ):
+            bare = [c for c in bare_cables if str(exc).startswith(f"{c}:")]
+            if "out of range" in str(exc) and bare:
                 message += (
                     " (a cable named alone uses wires 1..n since #508; "
-                    "list the wires, e.g. W1: [1, 1, 1], for the old meaning)"
+                    f"list the wires, e.g. {bare[0]}: [1, 1, 1], for the old meaning)"
                 )
             cls = WireVizError if type(exc) is Exception else type(exc)
             try:

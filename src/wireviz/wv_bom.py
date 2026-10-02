@@ -28,6 +28,14 @@ def optional_fields(part: Union[Connector, Cable, AdditionalComponent]) -> BOMEn
     return {field: part.get(field) for field in BOM_COLUMNS_OPTIONAL}
 
 
+def part_ignored_in_bom(component, part) -> bool:
+    """An additional component is hidden from the BOM when its own
+    ignore_in_bom says so, or else when its parent's does (upstream #300)."""
+    if part.ignore_in_bom is not None:
+        return bool(part.ignore_in_bom)
+    return bool(component.ignore_in_bom)
+
+
 def get_additional_component_table(
     harness: "Harness", component: Union[Connector, Cable]
 ) -> List[str]:
@@ -46,7 +54,10 @@ def get_additional_component_table(
                 "unit": part.unit,
                 "bgcolor": part.bgcolor,
             }
-            if harness.options.mini_bom_mode:
+            # A part hidden from the BOM has no BOM number: show it in full.
+            if harness.options.mini_bom_mode and not part_ignored_in_bom(
+                component, part
+            ):
                 id = get_bom_index(
                     harness.bom(),
                     bom_entry_key({**asdict(part), "description": part.description}),
@@ -73,6 +84,7 @@ def get_additional_component_bom(component: Union[Connector, Cable]) -> List[BOM
         part
         for part in component.additional_components
         if component.get_qty_multiplier(part.qty_multiplier)
+        and not part_ignored_in_bom(component, part)
     ]:
         bom_entries.append(
             {
@@ -122,7 +134,8 @@ def generate_bom(harness: "Harness") -> List[BOMEntry]:
                 }
             )
 
-        # add connectors aditional components to bom
+        # add connectors aditional components to bom (by default hidden
+        # with the connector, upstream #300)
         bom_entries.extend(get_additional_component_bom(connector))
 
     # cables
@@ -182,7 +195,8 @@ def generate_bom(harness: "Harness") -> List[BOMEntry]:
                         }
                     )
 
-        # add cable/bundles aditional components to bom
+        # add cable/bundles aditional components to bom (by default hidden
+        # with the cable, upstream #300)
         bom_entries.extend(get_additional_component_bom(cable))
 
     # add harness aditional components to bom directly, as they both are List[BOMEntry]

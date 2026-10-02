@@ -5,7 +5,51 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
+import yaml
+
 from wireviz.wv_safety import MAX_EXPAND
+
+
+class _WireVizLoader(yaml.SafeLoader):
+    """SafeLoader with YAML 1.2 booleans: only true/false are booleans.
+
+    YAML 1.1 also reads yes/no/on/off as booleans, so pin labels such as
+    NO, NC or ON turned into True/False and lost their text (upstream
+    #305). Boolean fields convert those words back, see yaml11_bool().
+    """
+
+
+_WireVizLoader.yaml_implicit_resolvers = {
+    first: [(tag, rx) for tag, rx in resolvers if tag != "tag:yaml.org,2002:bool"]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_WireVizLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+    list("tTfF"),
+)
+
+_YAML11_BOOL_WORDS = {
+    **{w: True for w in ("yes", "Yes", "YES", "on", "On", "ON")},
+    **{w: False for w in ("no", "No", "NO", "off", "Off", "OFF")},
+}
+
+
+def yaml_load(text: str):
+    """Parse WireViz YAML text (safe loader, YAML 1.2 booleans)."""
+    return yaml.load(text, Loader=_WireVizLoader)
+
+
+def yaml11_bool(value):
+    """Return True/False for the YAML 1.1 words yes/no/on/off, else value.
+
+    Used for boolean fields, so `show_name: no` keeps working after
+    yaml_load() stopped turning those words into booleans.
+    """
+    if isinstance(value, str) and value in _YAML11_BOOL_WORDS:
+        return _YAML11_BOOL_WORDS[value]
+    return value
+
 
 # Conservative equivalents (see upstream #282): each AWG value has no more
 # copper than its metric size, and each metric size is the smallest

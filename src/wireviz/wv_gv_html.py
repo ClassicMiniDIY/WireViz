@@ -2,6 +2,7 @@
 
 import re
 from html import escape
+from html.entities import name2codepoint
 from typing import List, Optional, Union
 
 from wireviz.DataClasses import Color
@@ -69,7 +70,8 @@ def html_img_tag(image) -> str:
     """Return the exact ``<img>`` tag WireViz emits for ``image``.
     wv_safety.check_dot_images allows only these strings in untrusted mode."""
     src = escape(str(image.src), quote=True)  # paths may contain & < > "
-    return f'<img scale="{image.scale}" src="{src}"/>'
+    scale = escape(str(image.scale), quote=True)
+    return f'<img scale="{scale}" src="{src}"/>'
 
 
 def html_image(image):
@@ -115,5 +117,43 @@ def html_size_attr(image):
     )
 
 
+# A bare &, < or > breaks the Graphviz HTML-like label (upstream #230):
+# XML rejects a bare & or <, and the DOT parser counts angle brackets to
+# find the end of the label. Text between tags is escaped; tags (<b>,
+# <br/>, <font ...>) and entities (&amp;, &#176;) are kept, so intended
+# markup still works.
+# Only the elements Graphviz HTML-like labels know, and only HTML entity
+# names or numeric entities: "<VBAT>" or "a&b;c" is user text.
+_TAG = re.compile(
+    r"(</?(?:b|br|font|i|img|o|s|sub|sup|u|hr|vr|table|tr|td)\b[^<>]*>)",
+    re.IGNORECASE,
+)
+_BARE_AMP = re.compile(
+    r"&(?!(?:#[0-9]+|#[xX][0-9a-fA-F]+|(?:"
+    + "|".join(sorted(name2codepoint, key=len, reverse=True))
+    + r"));)"
+)
+
+
+def escape_bare(inp):
+    """Escape &, < and > that are not part of an entity or a tag."""
+    if not isinstance(inp, str):
+        return inp
+    parts = _TAG.split(inp)
+    for i in range(0, len(parts), 2):  # even indexes are text between tags
+        text = _BARE_AMP.sub("&amp;", parts[i])
+        parts[i] = text.replace("<", "&lt;").replace(">", "&gt;")
+    return "".join(parts)
+
+
+def html_text(inp):
+    """Return a single-line value ready for a Graphviz HTML-like label."""
+    return escape_bare(remove_links(inp)) if isinstance(inp, str) else inp
+
+
 def html_line_breaks(inp):
-    return remove_links(inp).replace("\n", "<br />") if isinstance(inp, str) else inp
+    return (
+        escape_bare(remove_links(inp)).replace("\n", "<br />")
+        if isinstance(inp, str)
+        else inp
+    )

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Dict, List, Optional, Set, Tuple, Union
 
 from graphviz import Graph
+from graphviz.quoting import attr_list, quote
 
 from wireviz import APP_NAME, APP_URL, __version__, wv_colors
 from wireviz.DataClasses import (
@@ -46,6 +47,7 @@ from wireviz.wv_gv_html import (
     html_image,
     html_img_tag,
     html_line_breaks,
+    html_text,
     nested_html_table,
     remove_links,
 )
@@ -58,7 +60,12 @@ from wireviz.wv_helper import (
     tuplelist2tsv,
 )
 from wireviz.wv_html import generate_html_output
-from wireviz.wv_safety import UNTRUSTED_RENDER_TIMEOUT, check_dot_images, sanitize_svg
+from wireviz.wv_safety import (
+    UNTRUSTED_RENDER_TIMEOUT,
+    check_dot_images,
+    check_html_label,
+    sanitize_svg,
+)
 
 OLD_CONNECTOR_ATTR = {
     "pinout": "was renamed to 'pinlabels' in v0.2",
@@ -204,6 +211,28 @@ def _dot_attr_value(value: str) -> str:
     return '"' + re.sub(r'(?<!\\)"', r'\\"', value) + '"'
 
 
+def _edge(dot: Graph, tail: tuple, head: tuple, **attrs) -> None:
+    """Add an edge between two ``(node, port, compass)`` endpoints.
+
+    graphviz's ``Graph.edge()`` takes "node:port:compass" strings and
+    splits them on ":", so a designator that contains a colon broke the
+    DOT source (upstream #487). Each part is quoted on its own here.
+    The line has the same format ``Graph.edge()`` writes.
+    """
+
+    def endpoint(node, port, compass) -> str:
+        parts = [quote(str(node))]
+        if port:
+            parts.append(quote(port))
+        if compass:
+            parts.append(compass)
+        return ":".join(parts)
+
+    dot.body.append(
+        f"\t{endpoint(*tail)} -- {endpoint(*head)}{attr_list(kwargs=attrs)}\n"
+    )
+
+
 def check_old(node: str, old_attr: dict, args: dict) -> None:
     """Raise exception for any outdated attributes in args."""
     for attr, descr in old_attr.items():
@@ -296,22 +325,7 @@ class Harness:
     def _resolve_pin(self, name: str, pin):
         """Return the pin number for ``pin`` on connector ``name``, where
         ``pin`` is a pin number or a pin label."""
-        connector = self.connectors[name]
-        # check if provided name is ambiguous
-        if pin in connector.pins and pin in connector.pinlabels:
-            if connector.pins.index(pin) != connector.pinlabels.index(pin):
-                raise Exception(
-                    f"{name}:{pin} is defined both in pinlabels and pins, for different pins."
-                )
-            # TODO: Maybe issue a warning if present in both lists but referencing the same pin?
-        if pin in connector.pinlabels:
-            if connector.pinlabels.count(pin) > 1:
-                raise Exception(f"{name}:{pin} is defined more than once.")
-            index = connector.pinlabels.index(pin)
-            pin = connector.pins[index]  # map pin name to pin number
-        if not pin in connector.pins:
-            raise Exception(f"{name}:{pin} not found.")
-        return pin
+        return self.connectors[name].resolve_pin(pin)
 
     def add_mate_component(self, from_name, to_name, arrow_type) -> None:
         self.mates.append(MateComponent(from_name, to_name, arrow_type))
@@ -351,6 +365,15 @@ class Harness:
                     )
                 # list index starts at 0, wire IDs start at 1
                 via_wire = cable.colors.index(via_wire) + 1
+            elif (
+                isinstance(via_wire, int)
+                and not 1 <= via_wire <= cable.wirecount
+                and [str(label) for label in cable.wirelabels].count(str(via_wire)) == 1
+            ):
+                # A quoted numeric label ('10') arrives as the number 10.
+                via_wire = [str(label) for label in cable.wirelabels].index(
+                    str(via_wire)
+                ) + 1
             elif via_wire in cable.wirelabels:
                 if cable.wirelabels.count(via_wire) > 1:
                     raise Exception(
@@ -359,6 +382,19 @@ class Harness:
                 via_wire = (
                     cable.wirelabels.index(via_wire) + 1
                 )  # list index starts at 0, wire IDs start at 1
+            # Validate here: an out-of-range wire used to fail deep inside
+            # create_graph with an IndexError (upstream #208), and an
+            # unknown label was silently drawn as the shield.
+            if isinstance(via_wire, int) and not isinstance(via_wire, bool):
+                if not 1 <= via_wire <= cable.wirecount:
+                    raise ValueError(
+                        f"{via_name}:{via_wire} is out of range; "
+                        f"{via_name} has {cable.wirecount} wire(s)"
+                    )
+            elif via_wire != "s":
+                raise ValueError(f"{via_name}:{via_wire} not found.")
+            elif not cable.shield:
+                raise ValueError(f"{via_name}:s is used, but {via_name} has no shield.")
 
         # perform the actual connection
         self.cables[via_name].connect(from_name, from_pin, via_wire, to_name, to_pin)
@@ -408,15 +444,15 @@ class Harness:
 
             html = []
             # fmt: off
-            rows = [[f'{html_bgcolor(connector.bgcolor_title)}{remove_links(connector.name)}'
+            rows = [[f'{html_bgcolor(connector.bgcolor_title)}{html_text(connector.name)}'
                         if connector.show_name else None],
-                    [pn_info_string(HEADER_PN, None, remove_links(connector.pn)),
+                    [pn_info_string(HEADER_PN, None, html_text(connector.pn)),
                      html_line_breaks(pn_info_string(HEADER_MPN, connector.manufacturer, connector.mpn)),
                      html_line_breaks(pn_info_string(HEADER_SPN, connector.supplier, connector.spn))],
                     [html_line_breaks(connector.type),
                      html_line_breaks(connector.subtype),
                      f'{connector.pincount}-pin' if connector.show_pincount else None,
-                     translate_color(connector.color, self.options.color_mode) if connector.color else None,
+                     html_text(translate_color(connector.color, self.options.color_mode)) if connector.color else None,
                      html_colorbar(connector.color)],
                     '<!-- connector table -->' if connector.style != 'simple' else None,
                     [html_image(connector.image)],
@@ -446,13 +482,15 @@ class Harness:
 
                     pinhtml.append("   <tr>")
                     if connector.ports_left:
-                        pinhtml.append(f'    <td port="p{pinindex+1}l">{pinname}</td>')
+                        pinhtml.append(
+                            f'    <td port="p{pinindex+1}l">{html_text(pinname)}</td>'
+                        )
                     if pinlabel:
-                        pinhtml.append(f"    <td>{pinlabel}</td>")
+                        pinhtml.append(f"    <td>{html_text(pinlabel)}</td>")
                     if connector.pincolors:
                         if pincolor in wv_colors._color_hex.keys():
                             # fmt: off
-                            pinhtml.append(f'    <td sides="tbl">{translate_color(pincolor, self.options.color_mode)}</td>')
+                            pinhtml.append(f'    <td sides="tbl">{html_text(translate_color(pincolor, self.options.color_mode))}</td>')
                             pinhtml.append( '    <td sides="tbr">')
                             pinhtml.append( '     <table border="0" cellborder="1"><tr>')
                             pinhtml.append(f'      <td bgcolor="{wv_colors.translate_color(pincolor, "HEX")}" width="8" height="8" fixedsize="true"></td>')
@@ -463,7 +501,9 @@ class Harness:
                             pinhtml.append('    <td colspan="2"></td>')
 
                     if connector.ports_right:
-                        pinhtml.append(f'    <td port="p{pinindex+1}r">{pinname}</td>')
+                        pinhtml.append(
+                            f'    <td port="p{pinindex+1}r">{html_text(pinname)}</td>'
+                        )
                     pinhtml.append("   </tr>")
 
                 pinhtml.append("  </table>")
@@ -477,6 +517,8 @@ class Harness:
                 ]
 
             html = "\n".join(html)
+            if self.untrusted:
+                check_html_label(html, f"Connector {connector.name}")
             dot.node(
                 connector.name,
                 label=f"<\n{html}\n>",
@@ -499,9 +541,10 @@ class Harness:
                     s_b = "l" if side_b == Side.LEFT else "r"
                     d_a = "w" if side_a == Side.LEFT else "e"
                     d_b = "w" if side_b == Side.LEFT else "e"
-                    dot.edge(
-                        f"{connector.name}:p{pos_a}{s_a}:{d_a}",
-                        f"{connector.name}:p{pos_b}{s_b}:{d_b}",
+                    _edge(
+                        dot,
+                        (connector.name, f"p{pos_a}{s_a}", d_a),
+                        (connector.name, f"p{pos_b}{s_b}", d_b),
                         label=" ",  # Work-around to avoid over-sized loops.
                     )
 
@@ -528,10 +571,10 @@ class Harness:
                     awg_fmt = f" ({mm2_equiv(cable.gauge)} mm\u00B2)"
 
             # fmt: off
-            rows = [[f'{html_bgcolor(cable.bgcolor_title)}{remove_links(cable.name)}'
+            rows = [[f'{html_bgcolor(cable.bgcolor_title)}{html_text(cable.name)}'
                         if cable.show_name else None],
                     [pn_info_string(HEADER_PN, None,
-                        remove_links(cable.pn)) if not isinstance(cable.pn, list) else None,
+                        html_text(cable.pn)) if not isinstance(cable.pn, list) else None,
                      html_line_breaks(pn_info_string(HEADER_MPN,
                         cable.manufacturer if not isinstance(cable.manufacturer, list) else None,
                         cable.mpn if not isinstance(cable.mpn, list) else None)),
@@ -540,10 +583,10 @@ class Harness:
                         cable.spn if not isinstance(cable.spn, list) else None))],
                     [html_line_breaks(cable.type),
                      f'{cable.wirecount}x' if cable.show_wirecount else None,
-                     f'{cable.gauge} {cable.gauge_unit}{awg_fmt}' if cable.gauge else None,
+                     f'{html_text(str(cable.gauge))} {html_text(cable.gauge_unit)}{awg_fmt}' if cable.gauge else None,
                      '+ S' if cable.shield else None,
-                     f'{cable.length} {cable.length_unit}' if cable.length > 0 else None,
-                     translate_color(cable.color, self.options.color_mode) if cable.color else None,
+                     f'{cable.length} {html_text(cable.length_unit)}' if cable.length > 0 else None,
+                     html_text(translate_color(cable.color, self.options.color_mode)) if cable.color else None,
                      html_colorbar(cable.color)],
                     '<!-- wire table -->',
                     [html_image(cable.image)],
@@ -576,7 +619,7 @@ class Harness:
                     wireinfo.append(colorstr)
                 if cable.wirelabels:
                     wireinfo.append(wirelabel if wirelabel is not None else "")
-                wirehtml.append(f'     {":".join(wireinfo)}')
+                wirehtml.append(f'     {html_text(":".join(wireinfo))}')
 
                 wirehtml.append(f"    </td>")
                 wirehtml.append(f"    <td><!-- {i}_out --></td>")
@@ -600,9 +643,7 @@ class Harness:
                     wireidentification = []
                     if isinstance(cable.pn, list):
                         wireidentification.append(
-                            pn_info_string(
-                                HEADER_PN, None, remove_links(cable.pn[i - 1])
-                            )
+                            pn_info_string(HEADER_PN, None, html_text(cable.pn[i - 1]))
                         )
                     manufacturer_info = pn_info_string(
                         HEADER_MPN,
@@ -691,14 +732,16 @@ class Harness:
                 if connection.from_pin is not None:  # connect to left
                     from_connector = self.connectors[connection.from_name]
                     from_pin_index = from_connector.pins.index(connection.from_pin)
-                    from_port_str = (
-                        f":p{from_pin_index+1}r"
+                    from_port = (
+                        f"p{from_pin_index+1}r"
                         if from_connector.style != "simple"
-                        else ""
+                        else None
                     )
-                    code_left_1 = f"{connection.from_name}{from_port_str}:e"
-                    code_left_2 = f"{cable.name}:w{connection.via_port}:w"
-                    dot.edge(code_left_1, code_left_2)
+                    _edge(
+                        dot,
+                        (connection.from_name, from_port, "e"),
+                        (cable.name, f"w{connection.via_port}", "w"),
+                    )
                     if from_connector.show_name:
                         from_info = [
                             str(connection.from_name),
@@ -708,7 +751,7 @@ class Harness:
                             pinlabel = from_connector.pinlabels[from_pin_index]
                             if pinlabel != "":
                                 from_info.append(pinlabel)
-                        from_string = ":".join(from_info)
+                        from_string = html_text(":".join(map(str, from_info)))
                     else:
                         from_string = ""
                     html = [
@@ -718,19 +761,23 @@ class Harness:
                 if connection.to_pin is not None:  # connect to right
                     to_connector = self.connectors[connection.to_name]
                     to_pin_index = to_connector.pins.index(connection.to_pin)
-                    to_port_str = (
-                        f":p{to_pin_index+1}l" if to_connector.style != "simple" else ""
+                    to_port = (
+                        f"p{to_pin_index+1}l"
+                        if to_connector.style != "simple"
+                        else None
                     )
-                    code_right_1 = f"{cable.name}:w{connection.via_port}:e"
-                    code_right_2 = f"{connection.to_name}{to_port_str}:w"
-                    dot.edge(code_right_1, code_right_2)
+                    _edge(
+                        dot,
+                        (cable.name, f"w{connection.via_port}", "e"),
+                        (connection.to_name, to_port, "w"),
+                    )
                     if to_connector.show_name:
                         to_info = [str(connection.to_name), str(connection.to_pin)]
                         if to_connector.pinlabels:
                             pinlabel = to_connector.pinlabels[to_pin_index]
                             if pinlabel != "":
                                 to_info.append(pinlabel)
-                        to_string = ":".join(to_info)
+                        to_string = html_text(":".join(map(str, to_info)))
                     else:
                         to_string = ""
                     html = [
@@ -744,6 +791,8 @@ class Harness:
                 else ("filled", self.options.bgcolor_cable)
             )
             html = "\n".join(html)
+            if self.untrusted:
+                check_html_label(html, f"Cable {cable.name}")
             dot.node(
                 cable.name,
                 label=f"<\n{html}\n>",
@@ -770,19 +819,17 @@ class Harness:
             to_connector = self.connectors[mate.to_name]
             if isinstance(mate, MatePin) and from_connector.style != "simple":
                 from_pin_index = from_connector.pins.index(mate.from_pin)
-                from_port_str = f":p{from_pin_index+1}r"
+                from_port = f"p{from_pin_index+1}r"
             else:  # MateComponent or style == 'simple'
-                from_port_str = ""
+                from_port = None
             if isinstance(mate, MatePin) and to_connector.style != "simple":
                 to_pin_index = to_connector.pins.index(mate.to_pin)
-                to_port_str = f":p{to_pin_index+1}l"
+                to_port = f"p{to_pin_index+1}l"
             else:  # MateComponent or style == 'simple'
-                to_port_str = ""
-            code_from = f"{mate.from_name}{from_port_str}:e"
-            code_to = f"{mate.to_name}{to_port_str}:w"
+                to_port = None
 
             dot.attr("edge", color=color, style="dashed", dir=dir)
-            dot.edge(code_from, code_to)
+            _edge(dot, (mate.from_name, from_port, "e"), (mate.to_name, to_port, "w"))
 
         def typecheck(name: str, value: Any, expect: type) -> None:
             if not isinstance(value, expect):

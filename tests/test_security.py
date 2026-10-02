@@ -578,3 +578,127 @@ connections: [[X1], [X2]]
             src, return_types="svg", image_paths=[tmp_path], untrusted=untrusted
         )
         assert svg.count("data:image/png;base64,") == 2
+
+
+def test_review_b2_image_scale_cannot_carry_markup(tmp_path: Path):
+    """image.scale was written raw into the generated <img> tag, which
+    check_dot_images removes as a whole: markup in scale hid a second
+    <img> that Graphviz rasterized into PNG output."""
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    src = """
+connectors:
+  X1:
+    pincount: 1
+    image:
+      src: pic.png
+      scale: 'true" src="/etc/hosts"/></td></tr><tr><td><img scale="true'
+connections: [[X1]]
+"""
+    with pytest.raises(ValueError, match="image.scale must be one of"):
+        parse(src, return_types="png", image_paths=[tmp_path], untrusted=True)
+
+
+@pytest.mark.parametrize(
+    "scale, expected", [(True, "true"), ("false", "false"), ("Both", "both")]
+)
+def test_review_b2_valid_scales(tmp_path: Path, scale, expected):
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    data = {
+        "connectors": {
+            "X1": {"pincount": 1, "image": {"src": "pic.png", "scale": scale}}
+        },
+        "connections": [["X1"]],
+    }
+    h = parse(data, return_types="harness", image_paths=[tmp_path])
+    assert h.connectors["X1"].image.scale == expected
+
+
+# ===========================================================================
+# Batch A/B review round 2: raw values in HTML labels
+# ===========================================================================
+
+
+@pytest.mark.parametrize("value", ["'10'", "'<b>'", "true", "-5"])
+def test_review2_image_dimensions_must_be_numbers(tmp_path: Path, value: str):
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    src = (
+        f"connectors:\n  X1:\n    pincount: 1\n    image: {{src: pic.png, width: {value}}}\n"
+        "connections: [[X1]]\n"
+    )
+    with pytest.raises(ValueError, match="image.width must be a positive number"):
+        parse(src, return_types="harness", image_paths=[tmp_path])
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "gauge: '1>2 mm2'",
+        "color: 'x>y'",
+        "colors: ['a>b']",
+    ],
+)
+def test_review2_raw_values_cannot_end_the_label(field: str):
+    """A bare > in a value must be escaped: the DOT parser ends an HTML
+    label where < and > balance."""
+    src = (
+        f"connectors: {{X1: {{pincount: 1}}}}\ncables:\n  W1: {{wirecount: 1, {field}}}\n"
+        "connections:\n  - - X1: [1]\n    - W1: [1]\n"
+    )
+    for untrusted in (False, True):
+        h = parse(src, return_types="harness", untrusted=untrusted)
+        assert "<svg" in h.svg
+
+
+def test_review2_label_backstop():
+    from wireviz.wv_safety import check_html_label
+
+    check_html_label(
+        "<table><tr><td>a &amp; b &nbsp;<!-- 1_in --></td></tr></table>", "X"
+    )
+    for bad in [
+        "<table><tr><td>a > b</td></tr></table>",
+        "<b>unclosed",
+        '<td width=">">x</td>',
+    ]:
+        with pytest.raises(ValueError):
+            check_html_label(bad, "X")
+
+
+@pytest.mark.parametrize(
+    "name, payload",
+    [("x.png", b"%!PS-Adobe-3.0 EPSF-3.0\n"), ("x.png", None), ("x.svg", b"<svg/>")],
+)
+def test_review2_supplied_image_must_match_extension(tmp_path: Path, name, payload):
+    if payload is None:
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4)).save(buf, format="GIF")
+        payload = buf.getvalue()
+    (tmp_path / name).write_bytes(payload)
+    src = f"connectors:\n  X1: {{pincount: 1, image: {name}}}\nconnections: [[X1]]\n"
+    with pytest.raises(ValueError, match="Image x"):
+        parse(src, return_types="harness", image_paths=[tmp_path], untrusted=True)
+
+
+def test_sanitize_svg_does_not_depend_on_global_namespace_table():
+    """WeasyPrint calls ET.register_namespace("", ""), which removed our
+    default SVG namespace: the next untrusted SVG came out as <ns0:svg>."""
+    import xml.etree.ElementTree as ET
+
+    from wireviz.wv_safety import sanitize_svg
+
+    ET.register_namespace("", "")  # what weasyprint/pdf/metadata.py does
+    try:
+        svg = parse(
+            "connectors: {X1: {pincount: 1}}\nconnections: [[X1]]\n",
+            return_types="svg",
+            untrusted=True,
+        )
+    finally:
+        ET.register_namespace("", "http://www.w3.org/2000/svg")
+    assert "ns0:" not in svg and "<svg " in svg
+    assert (
+        sanitize_svg('<svg xmlns="http://www.w3.org/2000/svg"><g/></svg>').count("ns0")
+        == 0
+    )

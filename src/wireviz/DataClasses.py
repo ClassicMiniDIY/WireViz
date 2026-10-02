@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 
 import sys
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, fields
 from enum import Enum, auto
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
 
 from wireviz.wv_colors import COLOR_CODES, Color, ColorMode, Colors, ColorScheme
-from wireviz.wv_helper import aspect_ratio, int2tuple
+from wireviz.wv_helper import aspect_ratio, int2tuple, yaml11_bool
 from wireviz.wv_safety import check_count, check_fontname
 
 # Each type alias have their legal values described in comments - validation might be implemented in the future
@@ -25,6 +25,7 @@ CableMultiplier = (
     PlainText  # = Literal['wirecount', 'terminations', 'length', 'total_length']
 )
 ImageScale = PlainText  # = Literal['false', 'true', 'width', 'height', 'both']
+_IMAGE_SCALES = {"false", "true", "width", "height", "both"}
 
 # Type combinations
 Pin = Union[int, PlainText]  # Pin identifier
@@ -43,6 +44,33 @@ MetadataKeys = PlainText  # Literal['title', 'description', 'notes', ...]
 
 
 Side = Enum("Side", "LEFT RIGHT")
+
+_BOOL_TYPES = (bool, Optional[bool], Union[bool, Color])
+
+
+def _coerce_bools(obj) -> None:
+    """Turn yes/no/on/off strings into booleans in the boolean fields of
+    a dataclass. The YAML loader keeps those words as text so pin labels
+    such as NO/NC survive (upstream #305)."""
+    for f in fields(obj):
+        if f.type in _BOOL_TYPES:
+            setattr(obj, f.name, yaml11_bool(getattr(obj, f.name)))
+
+
+def _check_lists(owner: str, obj, names) -> None:
+    """Raise TypeError when a list attribute was given as a single string,
+    for example `colors: DIN` instead of `color_code: DIN` (upstream #265)."""
+    for name in names:
+        value = getattr(obj, name)
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            hint = (
+                " (for a color code, use color_code: instead)"
+                if name == "colors"
+                else ""
+            )
+            raise TypeError(
+                f"{owner}: {name} must be a list, e.g. [{value}], not {value!r}{hint}"
+            )
 
 
 class Metadata(dict):
@@ -68,6 +96,7 @@ class Options:
     output_dpi: Optional[float] = None
 
     def __post_init__(self):
+        _coerce_bools(self)
         check_fontname(self.fontname)
         if not self.bgcolor_node:
             self.bgcolor_node = self.bgcolor
@@ -101,6 +130,27 @@ class Image:
     # See also HTML doc at https://graphviz.org/doc/info/shapes.html#html
 
     def __post_init__(self):
+        _coerce_bools(self)
+        # scale goes into the generated <img> tag; only Graphviz's values
+        # are allowed, so it can never carry markup.
+        if self.scale is not None:
+            self.scale = str(yaml11_bool(self.scale)).lower()
+            if self.scale not in _IMAGE_SCALES:
+                raise ValueError(
+                    f"image.scale must be one of {', '.join(sorted(_IMAGE_SCALES))}, "
+                    f"not {self.scale!r}"
+                )
+        # width/height go into the image cell's attributes: numbers only.
+        for dim in ("width", "height"):
+            value = getattr(self, dim)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or value <= 0
+            ):
+                raise ValueError(
+                    f"image.{dim} must be a positive number, not {value!r}"
+                )
         if self.fixedsize is None:
             # Default True if any dimension specified unless self.scale also is specified.
             self.fixedsize = (self.width or self.height) and self.scale is None
@@ -137,6 +187,11 @@ class AdditionalComponent:
     unit: Optional[str] = None
     qty_multiplier: Union[ConnectorMultiplier, CableMultiplier, None] = None
     bgcolor: Optional[Color] = None
+    # None: follow the parent connector/cable's ignore_in_bom (upstream #300)
+    ignore_in_bom: Optional[bool] = None
+
+    def __post_init__(self) -> None:
+        _coerce_bools(self)
 
     @property
     def description(self) -> str:
@@ -176,6 +231,12 @@ class Connector:
     tweak: Optional[Tweak] = None
 
     def __post_init__(self) -> None:
+        _coerce_bools(self)
+        _check_lists(
+            f"Connector {self.name}", self, ("pins", "pinlabels", "pincolors", "loops")
+        )
+        if isinstance(self.image, str):  # `image: file.png` (upstream #292)
+            self.image = Image(src=self.image)
         if isinstance(self.image, dict):
             self.image = Image(**self.image)
         if isinstance(self.tweak, dict):
@@ -204,7 +265,7 @@ class Connector:
             )
             if not self.pincount:
                 raise Exception(
-                    "You need to specify at least one, pincount, pins, pinlabels, or pincolors"
+                    f"Connector {self.name}: specify at least one of pincount, pins, pinlabels or pincolors"
                 )
 
         check_count(f"Connector {self.name} pincount", self.pincount)
@@ -224,22 +285,47 @@ class Connector:
             # hide pincount for simple (1 pin) connectors by default
             self.show_pincount = self.style != "simple"
 
+        resolved_loops = []
         for loop in self.loops:
-            # TODO: allow using pin labels in addition to pin numbers, just like when defining regular connections
             # TODO: include properties of wire used to create the loop
-            if len(loop) != 2:
-                raise Exception("Loops must be between exactly two pins!")
+            if not isinstance(loop, (list, tuple)) or len(loop) != 2:
+                raise Exception(
+                    f"Connector {self.name}: loops must be between exactly two pins"
+                )
+            # Pins may be given by number or by label (upstream #432).
+            loop = [self.resolve_pin(pin) for pin in loop]
             for pin in loop:
-                if pin not in self.pins:
-                    raise Exception(
-                        f'Unknown loop pin "{pin}" for connector "{self.name}"!'
-                    )
                 # Make sure loop connected pins are not hidden.
                 self.activate_pin(pin, None)
+            resolved_loops.append(loop)
+        self.loops = resolved_loops
 
         for i, item in enumerate(self.additional_components):
             if isinstance(item, dict):
                 self.additional_components[i] = AdditionalComponent(**item)
+
+    def resolve_pin(self, pin: Pin) -> Pin:
+        """Return the pin number for ``pin``, given as a pin number or a
+        pin label. Raise if it is unknown or ambiguous."""
+        name = self.name
+        # check if provided name is ambiguous
+        if pin in self.pins and pin in self.pinlabels:
+            if self.pins.index(pin) != self.pinlabels.index(pin):
+                raise Exception(
+                    f"{name}:{pin} is defined both in pinlabels and pins, for different pins."
+                )
+            # TODO: Maybe issue a warning if present in both lists but referencing the same pin?
+        if pin in self.pinlabels:
+            if self.pinlabels.count(pin) > 1:
+                raise Exception(f"{name}:{pin} is defined more than once.")
+            pin = self.pins[self.pinlabels.index(pin)]  # map pin name to pin number
+        if not pin in self.pins:
+            # A quoted numeric label ('10') arrives as the number 10.
+            labels = [str(label) for label in self.pinlabels]
+            if str(pin) in labels and labels.count(str(pin)) == 1:
+                return self.pins[labels.index(str(pin))]
+            raise Exception(f"{name}:{pin} not found.")
+        return pin
 
     def activate_pin(self, pin: Pin, side: Side) -> None:
         self.visible_pins[pin] = True
@@ -346,6 +432,10 @@ class Cable:
     tweak: Optional[Tweak] = None
 
     def __post_init__(self) -> None:
+        _coerce_bools(self)
+        _check_lists(f"Cable {self.name}", self, ("colors", "wirelabels"))
+        if isinstance(self.image, str):  # `image: file.png` (upstream #292)
+            self.image = Image(src=self.image)
         if isinstance(self.image, dict):
             self.image = Image(**self.image)
         if isinstance(self.tweak, dict):
@@ -417,7 +507,7 @@ class Cable:
         else:  # wirecount implicit in length of color list
             if not self.colors:
                 raise Exception(
-                    "Unknown number of wires. Must specify wirecount or colors (implicit length)"
+                    f"Cable {self.name}: unknown number of wires. Must specify wirecount or colors (implicit length)"
                 )
             self.wirecount = len(self.colors)
 

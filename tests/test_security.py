@@ -673,3 +673,71 @@ def test_review_s2_title_backslashes(title: str):
     )
     svg = parse(src, return_types="svg")
     assert title.split()[0] in svg
+
+
+# ===========================================================================
+# Batch A/B review round 2: raw values in HTML labels
+# ===========================================================================
+
+
+@pytest.mark.parametrize("value", ["'10'", "'<b>'", "true", "-5"])
+def test_review2_image_dimensions_must_be_numbers(tmp_path: Path, value: str):
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    src = (
+        f"connectors:\n  X1:\n    pincount: 1\n    image: {{src: pic.png, width: {value}}}\n"
+        "connections: [[X1]]\n"
+    )
+    with pytest.raises(ValueError, match="image.width must be a positive number"):
+        parse(src, return_types="harness", image_paths=[tmp_path])
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "gauge: '1>2 mm2'",
+        "color: 'x>y'",
+        "colors: ['a>b']",
+    ],
+)
+def test_review2_raw_values_cannot_end_the_label(field: str):
+    """A bare > in a value must be escaped: the DOT parser ends an HTML
+    label where < and > balance."""
+    src = (
+        f"connectors: {{X1: {{pincount: 1}}}}\ncables:\n  W1: {{wirecount: 1, {field}}}\n"
+        "connections:\n  - - X1: [1]\n    - W1: [1]\n"
+    )
+    for untrusted in (False, True):
+        h = parse(src, return_types="harness", untrusted=untrusted)
+        assert "<svg" in h.svg
+
+
+def test_review2_label_backstop():
+    from wireviz.wv_safety import check_html_label
+
+    check_html_label(
+        "<table><tr><td>a &amp; b &nbsp;<!-- 1_in --></td></tr></table>", "X"
+    )
+    for bad in [
+        "<table><tr><td>a > b</td></tr></table>",
+        "<b>unclosed",
+        '<td width=">">x</td>',
+    ]:
+        with pytest.raises(ValueError):
+            check_html_label(bad, "X")
+
+
+@pytest.mark.parametrize(
+    "name, payload",
+    [("x.png", b"%!PS-Adobe-3.0 EPSF-3.0\n"), ("x.png", None), ("x.svg", b"<svg/>")],
+)
+def test_review2_supplied_image_must_match_extension(tmp_path: Path, name, payload):
+    if payload is None:
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4)).save(buf, format="GIF")
+        payload = buf.getvalue()
+    (tmp_path / name).write_bytes(payload)
+    src = f"connectors:\n  X1: {{pincount: 1, image: {name}}}\nconnections: [[X1]]\n"
+    with pytest.raises(ValueError, match="Image x"):
+        parse(src, return_types="harness", image_paths=[tmp_path], untrusted=True)

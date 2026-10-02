@@ -7,6 +7,8 @@ Fixes for open issues in the original [wireviz/WireViz](https://github.com/wirev
 ### Security
 
 - Untrusted mode: `image.scale` was written without escaping into the generated `<img>` tag, which let markup hide a second image that Graphviz then read into PNG/PDF output. `scale` now accepts only `false`, `true`, `width`, `height` or `both`.
+- Untrusted mode: a bare `>` in a value such as `gauge` or a color (in `SHORT` color mode) could end a Graphviz HTML label early. All label values are escaped, `image.width`/`height` must be numbers, and every generated label is checked to be well-formed with balanced angle brackets before Graphviz runs.
+- Untrusted mode: supplied image files must be `.png`, `.jpg`, `.gif` or `.webp`, and their content must match the extension (Pillow no longer probes other decoders such as EPS).
 
 ### Bug fixes
 

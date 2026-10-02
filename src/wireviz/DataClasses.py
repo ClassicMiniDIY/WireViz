@@ -188,6 +188,17 @@ class Image:
                     f"image.scale must be one of {', '.join(sorted(_IMAGE_SCALES))}, "
                     f"not {self.scale!r}"
                 )
+        # width/height go into the image cell's attributes: numbers only.
+        for dim in ("width", "height"):
+            value = getattr(self, dim)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or value <= 0
+            ):
+                raise ValueError(
+                    f"image.{dim} must be a positive number, not {value!r}"
+                )
         if self.fixedsize is None:
             # Default True if any dimension specified unless self.scale also is specified.
             self.fixedsize = (self.width or self.height) and self.scale is None

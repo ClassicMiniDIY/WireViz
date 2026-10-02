@@ -123,17 +123,13 @@ def wireviz(
         else:
             raise click.UsageError(f"Unknown output format: {code}")
     output_formats = tuple(output_formats)
+    if not output_formats:
+        raise click.UsageError("No output format given (-f).")
     output_formats_str = (
         f'[{"|".join(output_formats)}]'
         if len(output_formats) > 1
         else output_formats[0]
     )
-
-    write_to_stdout = str(output_dir) == "-" or str(output_name) == "-"
-    if write_to_stdout and len(output_formats) != 1:
-        raise click.UsageError(
-            "Exactly one output format (-f) must be specified when writing to stdout."
-        )
 
     # check prepend file
     if len(prepend) > 0:
@@ -156,14 +152,24 @@ def wireviz(
 
     for file in filepaths:
         if str(file) == "-":
-            yaml_input = prepend_input + sys.stdin.read()
+            # Read bytes and decode as UTF-8: the text-mode default uses
+            # the locale encoding (the ANSI code page on Windows).
+            stdin = getattr(sys.stdin, "buffer", None)
+            yaml_input = prepend_input + (
+                stdin.read().decode("utf-8") if stdin else sys.stdin.read()
+            )
             # No source-file directory available, so any relative
             # `image: src:` paths in the stdin YAML are resolved against
             # the current working directory (matching how a typical
             # piped invocation would be run from a project root).
-            image_paths = {Path.cwd()}
+            image_paths = [Path.cwd()]
             click.echo("Input:        <stdin>", err=True)
-            _output_dir = output_dir if output_dir else "-"
+            if output_dir:
+                _output_dir = output_dir
+            elif output_name and str(output_name) != "-":
+                _output_dir = Path.cwd()  # -O name: write name.* files here
+            else:
+                _output_dir = "-"  # no destination given: stdout
             _output_name = output_name if output_name else "stdin"
         else:
             file = Path(file)
@@ -186,17 +192,34 @@ def wireviz(
                         f"{file} has no embedded WireViz YAML (no "
                         f"'wireviz:yaml' iTXt chunk found)."
                     )
-                yaml_input = prepend_input + embedded
+                # The embedded YAML already holds any prepended text from
+                # the original render; adding it again duplicates anchors.
+                if prepend_input:
+                    click.echo(
+                        "Warning: --prepend is ignored for PNG input "
+                        "(the embedded YAML already contains it)",
+                        err=True,
+                    )
+                yaml_input = embedded
                 click.echo(f"Input file:   {file} (extracted YAML)", err=True)
             else:
                 yaml_input = prepend_input + file_read_text(file)
                 click.echo(f"Input file:   {file}", err=True)
-            image_paths = {file.parent}
+            image_paths = [file.parent]
             _output_dir = output_dir if output_dir else file.parent
             _output_name = output_name if output_name else file.stem
 
+        # Ordered and de-duplicated: the input directory wins over prepend
+        # directories when both hold an image with the same name.
         for p in prepend:
-            image_paths.add(Path(p).parent)
+            if Path(p).parent not in image_paths:
+                image_paths.append(Path(p).parent)
+
+        write_to_stdout = str(_output_dir) == "-" or str(_output_name) == "-"
+        if write_to_stdout and len(output_formats) != 1:
+            raise click.UsageError(
+                "Exactly one output format (-f) must be specified when writing to stdout."
+            )
 
         if write_to_stdout:
             click.echo(
@@ -213,7 +236,7 @@ def wireviz(
             output_formats=output_formats,
             output_dir=_output_dir,
             output_name=_output_name,
-            image_paths=list(image_paths),
+            image_paths=image_paths,
             source_path=file,
             template_dir=template_dir,
             embed_yaml=embed_yaml,

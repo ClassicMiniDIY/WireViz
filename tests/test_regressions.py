@@ -623,3 +623,53 @@ def test_audit_png_return_matches_file_output(minimal_yaml: Path):
     """parse(return_types="png") embeds the YAML like file output."""
     png = parse(minimal_yaml, return_types="png")
     assert read_yaml_from_png(io.BytesIO(png)) == minimal_yaml.read_text()
+
+
+# ===========================================================================
+# October 2026 audit — CLI bugs
+# ===========================================================================
+
+
+def test_audit_9_stdin_with_output_name_writes_files(runner, workdir: Path, minimal_yaml: Path):
+    """[9] `cat x.yml | wireviz -f s -O foo -` writes foo.svg."""
+    result = runner.invoke(cli, ["-f", "s", "-O", "foo", "-"], input=minimal_yaml.read_text())
+    assert result.exit_code == 0, result.stderr
+    assert (workdir / "foo.svg").exists()
+    assert "<svg" not in result.stdout
+
+
+def test_audit_9_stdin_default_formats_clean_error(runner, minimal_yaml: Path):
+    """[9] Default formats (hpst) to stdout is a usage error, not a traceback."""
+    result = runner.invoke(cli, ["-"], input=minimal_yaml.read_text())
+    assert result.exit_code == 2
+    assert "Exactly one output format" in result.stderr
+
+
+def test_audit_11_stdin_stdout_utf8(runner, workdir: Path):
+    """[11] Non-ASCII text survives stdin -> stdout as UTF-8."""
+    src = "connectors:\n  X1:\n    pinlabels: [Ω-sense]\nconnections: [[X1]]\n"
+    result = runner.invoke(cli, ["-f", "g", "-O", "-", "-"], input=src.encode("utf-8"))
+    assert result.exit_code == 0, result.stderr
+    assert "Ω-sense" in result.stdout_bytes.decode("utf-8")
+
+
+def test_audit_12_png_input_ignores_prepend(runner, workdir: Path):
+    """[12] Re-rendering a PNG made with --prepend must not prepend twice
+    (duplicate YAML anchors)."""
+    (workdir / "lib.yml").write_text("templates:\n  - &molex {pincount: 2}\n")
+    (workdir / "main.yml").write_text(
+        "connectors:\n  X1: *molex\nconnections: [[X1]]\n"
+    )
+    first = runner.invoke(cli, ["-f", "p", "-p", "lib.yml", "main.yml"])
+    assert first.exit_code == 0, first.stderr
+    second = runner.invoke(cli, ["-f", "s", "-p", "lib.yml", "main.png"])
+    assert second.exit_code == 0, second.stderr
+    assert "ignored for PNG input" in second.stderr
+    assert (workdir / "main.svg").exists()
+
+
+def test_audit_19_empty_format_is_usage_error(runner, minimal_yaml: Path):
+    """[19] `-f ""` is a usage error, not an IndexError."""
+    result = runner.invoke(cli, ["-f", "", str(minimal_yaml)])
+    assert result.exit_code == 2
+    assert "No output format" in result.stderr

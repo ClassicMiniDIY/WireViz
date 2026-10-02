@@ -936,15 +936,25 @@ class Harness:
             sys.stderr.write("CSV output is not yet supported\n")
 
         if filename is None:
-            # stdout mode — emit each rendered format in the user-requested order
+            # stdout mode — emit each rendered format in the user-requested
+            # order. Text is written as UTF-8 bytes: text-mode stdout uses
+            # the locale encoding and, on Windows, rewrites \n as \r\n.
+            sys.stdout.flush()
+            out = getattr(sys.stdout, "buffer", None)
             for f in fmt:
                 content = outputs.get(f)
                 if content is None:
                     continue
-                if isinstance(content, (bytes, bytearray)):
-                    sys.stdout.buffer.write(content)
-                else:
+                if out is None:  # stdout replaced by a text-only stream
+                    if isinstance(content, (bytes, bytearray)):
+                        raise RuntimeError(f"Cannot write binary {f} to text stdout")
                     sys.stdout.write(content)
+                    continue
+                if not isinstance(content, (bytes, bytearray)):
+                    content = content.encode("utf-8")
+                out.write(content)
+            if out is not None:
+                out.flush()
             return
 
         suffix_map = {"tsv": "bom.tsv"}

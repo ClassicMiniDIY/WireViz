@@ -68,6 +68,7 @@ from wireviz.wv_safety import (
     check_html_label,
     sanitize_svg,
 )
+from wireviz.wv_sheet import html_to_pdf
 
 OLD_CONNECTOR_ATTR = {
     "pinout": "was renamed to 'pinlabels' in v0.2",
@@ -1173,7 +1174,7 @@ class Harness:
                 out.flush()
             return
 
-        suffix_map = {"tsv": "bom.tsv", "csv": "bom.csv"}
+        suffix_map = {"tsv": "bom.tsv", "csv": "bom.csv", "sheet": "sheet.pdf"}
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
         for f, content in outputs.items():
             ext = suffix_map.get(f, f)
@@ -1223,7 +1224,7 @@ class Harness:
         outputs: Dict[str, Union[str, bytes]] = {}
 
         svg_str: Optional[str] = None
-        if "svg" in fmt or "html" in fmt:
+        if "svg" in fmt or "html" in fmt or "sheet" in fmt:
             # Resolve relative <image src=...> references against the YAML
             # source's directory when known; fall back to cwd. (In practice
             # wireviz.parse() rewrites relative image paths to absolute
@@ -1255,13 +1256,13 @@ class Harness:
         if "gv" in fmt:
             outputs["gv"] = graph.source
 
-        if "tsv" in fmt or "csv" in fmt or "html" in fmt:
+        if "tsv" in fmt or "csv" in fmt or "html" in fmt or "sheet" in fmt:
             bomlist = bom_list(self.bom())
             if "tsv" in fmt:
                 outputs["tsv"] = tuplelist2tsv(bomlist)
             if "csv" in fmt:
                 outputs["csv"] = tuplelist2csv(bomlist)
-            if "html" in fmt:
+            if "html" in fmt or "sheet" in fmt:
                 # Inline PNG as base64 in the HTML only when the PNG was
                 # rendered in this same call; otherwise let the template
                 # fall back to reading {output_dir}/{output_name}.png.
@@ -1270,7 +1271,7 @@ class Harness:
                     if png_bytes is not None
                     else None
                 )
-                outputs["html"] = generate_html_output(
+                html_page = generate_html_output(
                     svg_str,
                     bomlist,
                     self.metadata,
@@ -1282,6 +1283,11 @@ class Harness:
                     template_dir=template_dir,
                     untrusted=self.untrusted,
                 )
+                if "html" in fmt:
+                    outputs["html"] = html_page
+                if "sheet" in fmt:
+                    # print-ready PDF of the HTML page (upstream #32, #304)
+                    outputs["sheet"] = html_to_pdf(html_page)
 
         return outputs
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import re
+from datetime import date
 from html import escape
 from pathlib import Path
 from typing import Callable, Dict, List, Union
@@ -15,6 +16,7 @@ from wireviz.wv_helper import (
     smart_file_resolve,
 )
 from wireviz.wv_safety import check_template_name, sanitize_html_fragment
+
 
 def _latest_revision(metadata: Metadata) -> str:
     """Return the key of the most recently added entry in
@@ -139,9 +141,11 @@ def generate_html_output(
         "<!-- %bom_reversed% -->": bom_html_reversed,
         "<!-- %sheet_current% -->": "1",  # TODO: handle multi-page documents
         "<!-- %sheet_total% -->": "1",  # TODO: handle multi-page documents
+        # A4 when not set, so the DIN 6771 frame always has a size
         "<!-- %template_sheetsize% -->": clean(
-            (metadata.get("template") or {}).get("sheetsize", "")
+            (metadata.get("template") or {}).get("sheetsize") or "A4"
         ),
+        "<!-- %date% -->": date.today().isoformat(),
         "<!-- %revision% -->": clean(_latest_revision(metadata)),
     }
 

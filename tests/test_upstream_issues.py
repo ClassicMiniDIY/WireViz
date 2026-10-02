@@ -946,3 +946,74 @@ def test_issue350_short_errors(shorts: str, message: str):
     src = SHORTS.replace("[[L1, L2, L3], {YE: [N, AUX]}]", shorts)
     with pytest.raises((ValueError, TypeError, Exception), match=message):
         parse(src, return_types="harness")
+
+
+# ===========================================================================
+# Batch C5 — print-ready sheet PDF (#32, #304)
+# ===========================================================================
+
+
+def _weasyprint_available() -> bool:
+    try:
+        import weasyprint  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+needs_weasyprint = pytest.mark.skipif(
+    not _weasyprint_available(), reason="WeasyPrint (wireviz[pdf]) not available"
+)
+
+
+@needs_weasyprint
+@pytest.mark.parametrize("sheetsize", ["A4", "A3", "A2"])
+def test_issue32_sheet_pdf_page_size(tmp_path: Path, sheetsize: str):
+    """One page at the template's sheet size (frame + margins)."""
+    import weasyprint
+
+    src = (
+        f"metadata:\n  title: Sheet\n  template: {{name: din-6771, sheetsize: {sheetsize}}}\n"
+        + MINIMAL
+    )
+    parse(src, output_formats=("sheet",), output_dir=tmp_path, output_name="h")
+    assert (tmp_path / "h.sheet.pdf").read_bytes().startswith(b"%PDF")
+    html = parse(src, return_types="harness")._render(("html",))["html"]
+    pages = weasyprint.HTML(string=html).render().pages
+    assert len(pages) == 1
+    mm = 25.4 / 96  # CSS px -> mm
+    size = (round(pages[0].width * mm), round(pages[0].height * mm))
+    assert size == {"A4": (210, 297), "A3": (420, 297), "A2": (594, 420)}[sheetsize]
+
+
+@needs_weasyprint
+def test_issue32_sheet_pdf_untrusted_and_no_external_fetch():
+    src = (
+        "metadata:\n  title: '<img src=\"http://example.invalid/x.png\">T'\n" + MINIMAL
+    )
+    h = parse(src, return_types="harness", untrusted=True)
+    assert h._render(("sheet",))["sheet"].startswith(b"%PDF")
+
+
+def test_issue32_sheet_pdf_without_weasyprint(monkeypatch):
+    import builtins
+
+    from wireviz.wv_sheet import SheetPdfUnavailable
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "weasyprint":
+            raise ImportError("no weasyprint")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    h = parse(MINIMAL, return_types="harness")
+    with pytest.raises(SheetPdfUnavailable, match=r'pip install "wireviz\[pdf\]"'):
+        h._render(("sheet",))
+
+
+def test_issue32_sheet_cli_code():
+    from wireviz.wv_cli import format_codes
+
+    assert format_codes["D"] == "sheet" and format_codes["P"] == "pdf"

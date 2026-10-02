@@ -21,6 +21,7 @@ format_codes = {
     "h": "html",
     "p": "png",
     "P": "pdf",
+    "D": "sheet",
     "s": "svg",
     "t": "tsv",
 }

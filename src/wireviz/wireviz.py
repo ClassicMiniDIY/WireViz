@@ -64,6 +64,8 @@ def parse(
         * "html": the diagram and (depending on the template) the BOM, as a HTML file
         * "png":  the diagram, as a PNG raster image
         * "pdf":  the diagram, as a PDF document (no BOM — see "html" for that)
+        * "sheet": the HTML page (frame, diagram, BOM, title block) as a
+          print-ready PDF; needs ``pip install "wireviz[pdf]"``
         * "svg":  the diagram, as a SVG vector image
         * "tsv":  the BOM, as a tab-separated text file
 

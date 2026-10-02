@@ -24,6 +24,10 @@ setup(
         "pillow>=10.3",  # CVE-2023-4863, CVE-2023-44271, CVE-2024-28219
         "graphviz>=0.20",
     ],
+    extras_require={
+        # print-ready sheet PDF (-f D); also needs the Pango system library
+        "pdf": ["weasyprint>=62"],
+    },
     license="GPLv3",
     keywords="cable connector hardware harness wiring wiring-diagram wiring-harness",
     url=APP_URL,

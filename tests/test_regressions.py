@@ -7,6 +7,7 @@ regress to the pre-fix state. Each test cites the PR (or PRs) it
 guards.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -463,7 +464,8 @@ def test_pr10_review_unknown_format_uses_click_usage_error(runner, minimal_yaml:
     result = runner.invoke(cli, ["-f", "X", str(minimal_yaml)])
     assert result.exit_code == 2
     # click.UsageError adds the canonical "Try 'wireviz -h' for help."
-    assert "Try 'wireviz -h' for help" in result.stderr
+    # Older Click names the first help option (-h); newer Click (8.5) names --help.
+    assert re.search(r"Try 'wireviz (-h|--help)' for help", result.stderr)
 
 
 def test_pr10_review_source_path_autofills(minimal_yaml: Path):

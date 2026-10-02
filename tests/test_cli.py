@@ -6,6 +6,7 @@ The CLI is the user-visible surface — if anything regresses here,
 people notice.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -60,7 +61,8 @@ def test_cli_unknown_format_uses_click_usage_error(runner, minimal_yaml: Path):
     result = runner.invoke(cli, ["-f", "X", str(minimal_yaml)])
     assert result.exit_code == 2
     assert "Unknown output format" in result.stderr
-    assert "Try 'wireviz -h' for help" in result.stderr
+    # Older Click names the first help option (-h); newer Click (8.5) names --help.
+    assert re.search(r"Try 'wireviz (-h|--help)' for help", result.stderr)
 
 
 def test_cli_missing_input_file_errors(runner, workdir: Path):

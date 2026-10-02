@@ -165,6 +165,11 @@ def tuplelist2tsv(inp, header=None):
     return output
 
 
+def upper_first(text: str) -> str:
+    """Upper-case the first letter only ("EMI screen" stays as written)."""
+    return text[:1].upper() + text[1:]
+
+
 def tuplelist2csv(inp) -> str:
     """Return the BOM rows as CSV text (RFC 4180 quoting, upstream #98)."""
     import csv

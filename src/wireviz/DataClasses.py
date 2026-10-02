@@ -137,7 +137,15 @@ class Options:
         _coerce_bools(self)
         check_fontname(self.fontname)
         if not isinstance(self.terminology, Terminology):
-            self.terminology = Terminology(**(self.terminology or {}))
+            terms = self.terminology or {}
+            if not isinstance(terms, dict) or set(terms) - {"pin", "wire", "shield"}:
+                raise ValueError(
+                    "options.terminology must be a mapping with pin, wire "
+                    f"and/or shield, not {terms!r}"
+                )
+            if not all(isinstance(v, str) or v is None for v in terms.values()):
+                raise ValueError("options.terminology values must be text")
+            self.terminology = Terminology(**terms)
         if not self.bgcolor_node:
             self.bgcolor_node = self.bgcolor
         if not self.bgcolor_connector:
@@ -325,6 +333,11 @@ class Connector:
             color = None
             if isinstance(loop, dict) and len(loop) == 1:
                 color, loop = next(iter(loop.items()))
+                if not isinstance(color, str):
+                    raise ValueError(
+                        f"Connector {self.name}: a loop color must be a color "
+                        f"name such as RD, not {color!r}"
+                    )
             if not isinstance(loop, (list, tuple)) or len(loop) != 2:
                 raise Exception(
                     f"Connector {self.name}: loops must be between exactly two pins"

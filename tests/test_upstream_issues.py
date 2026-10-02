@@ -891,3 +891,58 @@ def test_issue3_twisted_errors(twisted: str, message: str):
     src = TWISTED.replace("[[RD, BK], {wires: [3, 4], rate: 20/m}]", twisted)
     with pytest.raises((ValueError, TypeError), match=message):
         parse(src, return_types="harness")
+
+
+# ===========================================================================
+# Batch C4 — internal shorts / jumpers (#350)
+# ===========================================================================
+
+SHORTS = """
+connectors:
+  TB1:
+    pinlabels: [L1, L2, L3, N, PE, AUX]
+    hide_disconnected_pins: true
+    shorts: [[L1, L2, L3], {YE: [N, AUX]}]
+    additional_components:
+      - {type: Ferrule, qty_multiplier: populated}
+  X2: {pincount: 6}
+cables:
+  W1: {wirecount: 2}
+connections:
+  - - TB1: [1, 4]
+    - W1: [1, 2]
+    - X2: [1, 4]
+"""
+
+
+@pytest.mark.parametrize("untrusted", [False, True])
+def test_issue350_shorts_render(untrusted: bool):
+    h = parse(SHORTS, return_types="harness", untrusted=untrusted)
+    tb1 = h.connectors["TB1"]
+    assert tb1.short_groups == [([1, 2, 3], None), ([4, 6], "YE")]
+    source = h.graph.source
+    assert source.count("&#9679;") == 5  # one dot per shorted pin
+    assert 'bgcolor="#ffff00"' in source  # YE bar
+    assert "<svg" in h.svg
+
+
+def test_issue350_shorted_pins_are_populated_and_visible():
+    h = parse(SHORTS, return_types="harness")
+    tb1 = h.connectors["TB1"]
+    assert set(tb1.visible_pins) == {1, 2, 3, 4, 6}  # PE (5) stays hidden
+    assert tb1.get_qty_multiplier("populated") == 5
+
+
+@pytest.mark.parametrize(
+    "shorts, message",
+    [
+        ("[[1]]", "2 or more pins"),
+        ("[[1, 2], [2, 3]]", "more than one short"),
+        ("[[1, NOPE]]", "TB1:NOPE not found"),
+        ("[{5: [1, 2]}]", "short color must be"),
+    ],
+)
+def test_issue350_short_errors(shorts: str, message: str):
+    src = SHORTS.replace("[[L1, L2, L3], {YE: [N, AUX]}]", shorts)
+    with pytest.raises((ValueError, TypeError, Exception), match=message):
+        parse(src, return_types="harness")

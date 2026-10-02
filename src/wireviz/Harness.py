@@ -213,6 +213,27 @@ def _dot_attr_value(value: str) -> str:
     return '"' + re.sub(r'(?<!\\)"', r'\\"', value) + '"'
 
 
+def short_cells(connector: Connector, pinindex: int) -> List[str]:
+    """Return one table cell per short (upstream #350) for the pin row at
+    ``pinindex``: a solid bar from the first to the last shorted pin, with
+    a dot at each shorted pin."""
+    cells = []
+    for pins, color in connector.short_groups:
+        rows = [connector.pins.index(pin) for pin in pins]
+        hex_color = get_color_hex(color)[0] if color else "#000000"
+        if pinindex in rows:
+            r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
+            dot = "#000000" if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else "#ffffff"
+            cells.append(
+                f'    <td border="0" bgcolor="{hex_color}"><font color="{dot}">&#9679;</font></td>'
+            )
+        elif min(rows) < pinindex < max(rows):
+            cells.append(f'    <td border="0" bgcolor="{hex_color}"></td>')
+        else:
+            cells.append('    <td border="0"></td>')
+    return cells
+
+
 def _edge(dot: Graph, tail: tuple, head: tuple, **attrs) -> None:
     """Add an edge between two ``(node, port, compass)`` endpoints.
 
@@ -529,6 +550,9 @@ class Harness:
                         pinhtml.append(
                             f'    <td port="p{pinindex+1}l">{html_text(pinname)}</td>'
                         )
+                    # Shorts sit next to the left ports (or first): every row
+                    # has those cells, so the short columns line up.
+                    pinhtml.extend(short_cells(connector, pinindex))
                     if pinlabel:
                         pinhtml.append(f"    <td>{html_text(pinlabel)}</td>")
                     if connector.pincolors:

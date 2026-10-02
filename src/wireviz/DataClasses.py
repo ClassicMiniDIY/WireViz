@@ -274,6 +274,8 @@ class Connector:
     show_pincount: Optional[bool] = None
     hide_disconnected_pins: bool = False
     loops: List[List[Pin]] = field(default_factory=list)
+    # Internal shorts / jumpers (upstream #350): [[1, 2, 3], {RD: [5, 6]}]
+    shorts: List = field(default_factory=list)
     ignore_in_bom: bool = False
     additional_components: List[AdditionalComponent] = field(default_factory=list)
     tweak: Optional[Tweak] = None
@@ -362,6 +364,36 @@ class Connector:
             resolved_loops.append(loop)
             self.loop_colors.append(color)
         self.loops = resolved_loops
+
+        # (pins, color) per short; shorted pins are populated and visible
+        self.short_groups: List[Tuple[List[Pin], Optional[Color]]] = []
+        if not isinstance(self.shorts, list):
+            raise TypeError(
+                f"Connector {self.name}: shorts must be a list of pin groups"
+            )
+        shorted = set()
+        for short in self.shorts:
+            color = None
+            if isinstance(short, dict) and len(short) == 1:
+                color, short = next(iter(short.items()))
+                if not isinstance(color, str):
+                    raise ValueError(
+                        f"Connector {self.name}: a short color must be a color "
+                        f"name such as RD, not {color!r}"
+                    )
+            if not isinstance(short, list) or len(short) < 2:
+                raise ValueError(
+                    f"Connector {self.name}: each short needs a list of 2 or more pins"
+                )
+            pins = [self.resolve_pin(pin) for pin in short]
+            for pin in pins:
+                if pin in shorted:
+                    raise ValueError(
+                        f"Connector {self.name}: pin {pin} is in more than one short"
+                    )
+                shorted.add(pin)
+                self.activate_pin(pin, None)
+            self.short_groups.append((pins, color))
 
         for i, item in enumerate(self.additional_components):
             if isinstance(item, dict):

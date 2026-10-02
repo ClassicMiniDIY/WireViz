@@ -91,6 +91,11 @@ tweak:  # optional tweaking of .gv output
                  # pins may be given by number or by pin label, e.g. [VCC, SENSE];
                  # give a loop a wire color with a one-key mapping: {RD: [VCC, SENSE]}
 
+  # internal shorts / jumpers, e.g. on terminal blocks: each a list of 2+ pins
+  # (numbers or labels); optional color as a one-key mapping: {RD: [5, 6]}.
+  # Shorted pins count as populated and are always shown.
+  shorts: <List>
+
   # stripping lengths at this connector (shown in the diagram)
   strip:
     sleeve: <int/float/str>      # numbers are taken as mm, e.g. 10 or '0.4 in'

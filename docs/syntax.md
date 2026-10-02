@@ -388,7 +388,9 @@ See [HTML Output Templates](../src/wireviz/templates/) for how metadata entries 
   # 'GER'  : Uppercase short German color name
   color_mode: <str>            # Default = 'SHORT'
 
-  # Fontname to use in diagram and HTML output
+  # Fontname to use in diagram and HTML output.
+  # Allowed characters: letters, digits, space and , . : + - _
+  # (for example 'DejaVu Sans' or 'Helvetica:bold')
   fontname: <str>              # Default = 'arial'
 
   # If True, show only a BOM entry reference together with basic info

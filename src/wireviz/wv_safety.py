@@ -25,8 +25,8 @@ MAX_EXPAND = 10_000
 
 # ``options.fontname`` is written into Graphviz attributes and the HTML
 # template, and Graphviz does not escape it in SVG output. Font family
-# names never need markup characters.
-FONTNAME_PATTERN = re.compile(r"^[\w][\w ,.\-]*$")
+# names never need markup characters (fontconfig styles use : and +).
+FONTNAME_PATTERN = re.compile(r"^[\w][\w ,.:+\-]*$")
 
 
 def check_fontname(fontname: str) -> str:
@@ -35,7 +35,7 @@ def check_fontname(fontname: str) -> str:
     if not isinstance(fontname, str) or not FONTNAME_PATTERN.fullmatch(fontname):
         raise ValueError(
             f"options.fontname {fontname!r} is not a valid font name "
-            "(allowed: letters, digits, space, comma, period, hyphen, underscore)"
+            "(allowed: letters, digits, space and , . : + - _)"
         )
     return fontname
 

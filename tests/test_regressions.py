@@ -795,3 +795,12 @@ def test_review_tweak_value_quoting_edge_cases(value: str, emitted: str):
     h = parse(data, return_types="harness")
     assert emitted in h.graph.source
     assert "<svg" in h.svg
+
+
+def test_review3_str_path_to_png_without_yaml(tmp_path: Path):
+    """A str path to a real PNG without WireViz YAML reports that, not
+    a confusing 'Expected a dict' error."""
+    f = tmp_path / "plain.png"
+    f.write_bytes(TRS_PNG.read_bytes())
+    with pytest.raises(ValueError, match="no embedded WireViz YAML"):
+        parse(str(f), return_types="harness")

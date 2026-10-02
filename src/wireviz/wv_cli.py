@@ -178,9 +178,9 @@ def wireviz(
 
             if file.suffix.lower() == ".png":
                 # PNG input: try to recover the YAML embedded by an
-                # earlier WireViz render. Catch PIL's UnidentifiedImageError
-                # (and anything else PIL throws for corrupt files) so the
-                # user sees a clean message instead of a stack trace.
+                # earlier WireViz render. read_yaml_from_png raises
+                # ValueError for files that are not PNGs or are truncated;
+                # show a clean message instead of a stack trace.
                 try:
                     embedded = read_yaml_from_png(file)
                 except Exception as exc:

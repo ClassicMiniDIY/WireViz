@@ -54,7 +54,9 @@ connections: [[X1]]
         _render_svg(src)
 
 
-@pytest.mark.parametrize("name", ["arial", "DejaVu Sans Mono", "Arial, Helvetica"])
+@pytest.mark.parametrize(
+    "name", ["arial", "DejaVu Sans Mono", "Arial, Helvetica", "Helvetica:bold", "M+ 1p"]
+)
 def test_c1_plain_fontnames_accepted(name: str):
     src = f"""
 options: {{fontname: '{name}'}}

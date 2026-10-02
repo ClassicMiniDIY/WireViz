@@ -561,10 +561,6 @@ def _get_yaml_data_and_path(
     if not isinstance(inp, Dict):  # received a str
         try:
             yaml_path = Path(inp).expanduser().resolve(strict=True)
-            # if no FileNotFoundError exception happens, get file contents
-            yaml_str = _read_source(yaml_path)
-        except UnicodeDecodeError:
-            raise  # a real file that is not UTF-8 — not a YAML string
         except (FileNotFoundError, OSError, ValueError) as e:
             # if inp is a long YAML string, Pathlib will normally raise
             # FileNotFoundError or OSError(errno = ENAMETOOLONG) when
@@ -583,6 +579,10 @@ def _get_yaml_data_and_path(
             # file does not exist; assume inp is a YAML string
             yaml_str = inp
             yaml_path = None
+        else:
+            # The path exists, so it is a file: read errors (not UTF-8,
+            # a PNG without WireViz YAML, a directory) are real errors.
+            yaml_str = _read_source(yaml_path)
         yaml_data = yaml.safe_load(yaml_str)
     else:
         # received a Dict — deep-copy so the parsing pipeline's in-place

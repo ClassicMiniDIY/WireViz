@@ -538,3 +538,41 @@ def test_review_malformed_itxt_raises_valueerror():
 
     with pytest.raises(ValueError, match="Malformed"):
         _parse_itxt(b"wireviz:yaml")
+
+
+# ===========================================================================
+# Code review round 2
+# ===========================================================================
+
+
+def test_review2_img_tag_with_allowed_src_and_extra_attributes_refused(tmp_path: Path):
+    """Graphviz uses the last src attribute, so a hypertext <img> that
+    starts with an allowed path must still be refused."""
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    allowed = (tmp_path / "pic.png").resolve()
+    src = f"""
+connectors:
+  X1:
+    pincount: 1
+    image: {{src: pic.png}}
+    notes: '<table><tr><td><img src="{allowed}" SRC="{allowed}"/></td></tr></table>'
+connections: [[X1]]
+"""
+    with pytest.raises(ValueError, match="image: src"):
+        parse(src, return_types="png", image_paths=[tmp_path], untrusted=True)
+
+
+def test_review2_shared_image_mapping_via_alias(tmp_path: Path):
+    """A YAML alias may share one image: mapping between components."""
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    src = """
+connectors:
+  X1: {pincount: 1, image: &img {src: pic.png}}
+  X2: {pincount: 1, image: *img}
+connections: [[X1], [X2]]
+"""
+    for untrusted in (False, True):
+        svg = parse(
+            src, return_types="svg", image_paths=[tmp_path], untrusted=untrusted
+        )
+        assert svg.count("data:image/png;base64,") == 2

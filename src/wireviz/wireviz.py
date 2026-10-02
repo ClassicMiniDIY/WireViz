@@ -205,6 +205,10 @@ def parse(
                         # The Image dataclass might need to open an image file with a relative path.
                         image = attribs.get("image")
                         if isinstance(image, dict):
+                            # Copy before rewriting src: a YAML alias may
+                            # share this mapping with another component.
+                            attribs = {**attribs, "image": dict(image)}
+                            image = attribs["image"]
                             image_path = image["src"]
                             if untrusted:
                                 image["src"] = check_untrusted_image(

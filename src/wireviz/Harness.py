@@ -44,6 +44,7 @@ from wireviz.wv_gv_html import (
     html_caption,
     html_colorbar,
     html_image,
+    html_img_tag,
     html_line_breaks,
     nested_html_table,
     remove_links,
@@ -878,7 +879,14 @@ class Harness:
         """
         if not self.untrusted:
             return self.graph.pipe(format=fmt)
-        check_dot_images(self.graph.source, self._declared_images())
+        check_dot_images(
+            self.graph.source,
+            {
+                html_img_tag(node.image)
+                for node in [*self.connectors.values(), *self.cables.values()]
+                if node.image is not None
+            },
+        )
         try:
             result = subprocess.run(
                 ["dot", "-Kdot", f"-T{fmt}"],

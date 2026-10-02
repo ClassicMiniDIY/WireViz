@@ -96,25 +96,28 @@ def check_untrusted_image(
     return candidate
 
 
-# <img> tags in Graphviz HTML-like labels. Graphviz loads the file for
-# every output format (PNG and PDF rasterize it), so untrusted input may
-# only reference images that passed check_untrusted_image().
-_DOT_IMG_TAG = re.compile(r"<\s*img\b[^>]*>", re.IGNORECASE)
-_DOT_IMG_SRC = re.compile(r"\bsrc\s*=\s*(?:\"([^\"]*)\"|'([^']*)')", re.IGNORECASE)
+# Start of an <img> tag in a Graphviz HTML-like label. Graphviz loads
+# the file for every output format (PNG and PDF rasterize it).
+_DOT_IMG_START = re.compile(r"<\s*img\b", re.IGNORECASE)
 
 
-def check_dot_images(dot_source: str, allowed: Set[Path]) -> None:
-    """Raise ValueError if the DOT source loads any image file that is
-    not in ``allowed`` (for example an ``<img>`` typed into ``notes``)."""
-    for tag in _DOT_IMG_TAG.findall(dot_source):
-        m = _DOT_IMG_SRC.search(tag)
-        src = ""
-        if m:
-            src = html.unescape(m.group(1) if m.group(1) is not None else m.group(2))
-        if not src or Path(src).resolve() not in allowed:
-            raise ValueError(
-                "Images may only be added with image: src:, not with <img> in text"
-            )
+def check_dot_images(dot_source: str, generated_tags: Set[str]) -> None:
+    """Raise ValueError if the DOT source holds any ``<img>`` tag other
+    than the exact tags WireViz generated for declared images
+    (``wv_gv_html.html_img_tag``).
+
+    Parsing user-written tags is not safe: Graphviz reads attribute
+    names case-insensitively and uses the last ``src``, so a tag that
+    looks allowed to a regex can load another file. Removing the known
+    generated tags and refusing any ``<img`` that remains avoids that.
+    """
+    remaining = dot_source
+    for tag in generated_tags:
+        remaining = remaining.replace(tag, "")
+    if _DOT_IMG_START.search(remaining):
+        raise ValueError(
+            "Images may only be added with image: src:, not with <img> in text"
+        )
 
 
 def check_template_name(name: str, field: str = "metadata.template.name") -> str:

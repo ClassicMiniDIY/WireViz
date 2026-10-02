@@ -206,6 +206,11 @@ class AdditionalComponent:
     unit: Optional[str] = None
     qty_multiplier: Union[ConnectorMultiplier, CableMultiplier, None] = None
     bgcolor: Optional[Color] = None
+    # None: follow the parent connector/cable's ignore_in_bom (upstream #300)
+    ignore_in_bom: Optional[bool] = None
+
+    def __post_init__(self) -> None:
+        _coerce_bools(self)
 
     @property
     def description(self) -> str:
@@ -343,6 +348,10 @@ class Connector:
                 raise Exception(f"{name}:{pin} is defined more than once.")
             pin = self.pins[self.pinlabels.index(pin)]  # map pin name to pin number
         if not pin in self.pins:
+            # A quoted numeric label ('10') arrives as the number 10.
+            labels = [str(label) for label in self.pinlabels]
+            if str(pin) in labels and labels.count(str(pin)) == 1:
+                return self.pins[labels.index(str(pin))]
             raise Exception(f"{name}:{pin} not found.")
         return pin
 
@@ -528,7 +537,7 @@ class Cable:
         else:  # wirecount implicit in length of color list
             if not self.colors:
                 raise Exception(
-                    "Unknown number of wires. Must specify wirecount or colors (implicit length)"
+                    f"Cable {self.name}: unknown number of wires. Must specify wirecount or colors (implicit length)"
                 )
             self.wirecount = len(self.colors)
 

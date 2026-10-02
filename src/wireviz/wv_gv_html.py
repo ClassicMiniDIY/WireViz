@@ -2,6 +2,7 @@
 
 import re
 from html import escape
+from html.entities import name2codepoint
 from typing import List, Optional, Union
 
 from wireviz.DataClasses import Color
@@ -120,8 +121,17 @@ def html_size_attr(image):
 # find the end of the label. Text between tags is escaped; tags (<b>,
 # <br/>, <font ...>) and entities (&amp;, &#176;) are kept, so intended
 # markup still works.
-_TAG = re.compile(r"(<[A-Za-z/!][^<>]*>)")
-_BARE_AMP = re.compile(r"&(?!(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);)")
+# Only the elements Graphviz HTML-like labels know, and only HTML entity
+# names or numeric entities: "<VBAT>" or "a&b;c" is user text.
+_TAG = re.compile(
+    r"(</?(?:b|br|font|i|img|o|s|sub|sup|u|hr|vr|table|tr|td)\b[^<>]*>)",
+    re.IGNORECASE,
+)
+_BARE_AMP = re.compile(
+    r"&(?!(?:#[0-9]+|#[xX][0-9a-fA-F]+|(?:"
+    + "|".join(sorted(name2codepoint, key=len, reverse=True))
+    + r"));)"
+)
 
 
 def escape_bare(inp):

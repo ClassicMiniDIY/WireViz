@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
+from wireviz.wv_safety import MAX_EXPAND
+
 awg_equiv_table = {
     "0.09": "28",
     "0.14": "26",
@@ -44,23 +46,28 @@ def expand(yaml_data):
     if not isinstance(yaml_data, list):
         yaml_data = [yaml_data]
     for e in yaml_data:
+        if isinstance(e, (list, dict)):
+            # Without this check, str(e) of a YAML alias tree can grow
+            # exponentially (a few hundred bytes of YAML -> gigabytes).
+            raise ValueError(
+                f"Expected a pin/wire number, name or range, but got a {type(e).__name__}"
+            )
         e = str(e)
         if "-" in e:
             a, b = e.split("-", 1)
             try:
                 a = int(a)
                 b = int(b)
-                if a < b:
-                    for x in range(a, b + 1):
-                        output.append(x)  # ascending range
-                elif a > b:
-                    for x in range(a, b - 1, -1):
-                        output.append(x)  # descending range
-                else:  # a == b
-                    output.append(a)  # range of length 1
-            except:
+            except ValueError:
                 # '-' was not a delimiter between two ints, pass e through unchanged
                 output.append(e)
+                continue
+            if abs(a - b) + 1 > MAX_EXPAND:
+                raise ValueError(
+                    f"Range {e} has more than the limit of {MAX_EXPAND} entries"
+                )
+            step = 1 if a <= b else -1  # ascending, descending, or length 1
+            output.extend(range(a, b + step, step))
         else:
             try:
                 x = int(e)  # single int

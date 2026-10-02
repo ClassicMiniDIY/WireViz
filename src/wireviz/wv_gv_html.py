@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import re
+from html import escape
 from typing import List, Optional, Union
 
 from wireviz.DataClasses import Color
@@ -70,7 +71,8 @@ def html_image(image):
     if not image:
         return None
     # The leading attributes belong to the preceeding tag. See where used below.
-    html = f'{html_size_attr(image)}><img scale="{image.scale}" src="{image.src}"/>'
+    src = escape(str(image.src), quote=True)  # paths may contain & < > "
+    html = f'{html_size_attr(image)}><img scale="{image.scale}" src="{src}"/>'
     if image.fixedsize:
         # Close the preceeding tag and enclose the image cell in a table without
         # borders to avoid narrow borders when the fixed width < the node width.

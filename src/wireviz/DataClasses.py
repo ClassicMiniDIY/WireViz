@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 
 from wireviz.wv_colors import COLOR_CODES, Color, ColorMode, Colors, ColorScheme
 from wireviz.wv_helper import aspect_ratio, int2tuple
+from wireviz.wv_safety import check_count, check_fontname
 
 # Each type alias have their legal values described in comments - validation might be implemented in the future
 PlainText = str  # Text not containing HTML tags nor newlines
@@ -67,6 +68,7 @@ class Options:
     output_dpi: Optional[float] = 96.0
 
     def __post_init__(self):
+        check_fontname(self.fontname)
         if not self.bgcolor_node:
             self.bgcolor_node = self.bgcolor
         if not self.bgcolor_connector:
@@ -204,6 +206,8 @@ class Connector:
                 raise Exception(
                     "You need to specify at least one, pincount, pins, pinlabels, or pincolors"
                 )
+
+        check_count(f"Connector {self.name} pincount", self.pincount)
 
         # create default list for pins (sequential) if not specified
         if not self.pins:
@@ -393,6 +397,7 @@ class Cable:
         self.connections = []
 
         if self.wirecount:  # number of wires explicitly defined
+            check_count(f"Cable {self.name} wirecount", self.wirecount)
             if self.colors:  # use custom color palette (partly or looped if needed)
                 pass
             elif self.color_code:

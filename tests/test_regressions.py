@@ -730,3 +730,37 @@ def test_audit_15_tweak_override_values(value: str, emitted: str):
     h = parse(data, return_types="harness")
     assert emitted in h.graph.source
     assert "<svg" in h.svg
+
+
+# ===========================================================================
+# Upstream issue #510 — pin labels in mate (arrow) connections
+# ===========================================================================
+
+
+def test_issue510_mate_pins_by_label():
+    src = """
+connectors:
+  X1: {pinlabels: [GND, VCC]}
+  X2: {pinlabels: [GND, VCC]}
+connections:
+  - - X1: [VCC, GND]
+    - -->
+    - X2: [VCC, GND]
+"""
+    h = parse(src, return_types="harness")
+    assert [(m.from_pin, m.to_pin) for m in h.mates] == [(2, 2), (1, 1)]
+    assert "<svg" in h.svg
+
+
+def test_issue510_mate_unknown_pin_clear_error():
+    src = """
+connectors:
+  X1: {pinlabels: [GND]}
+  X2: {pinlabels: [GND]}
+connections:
+  - - X1: [NOPE]
+    - -->
+    - X2: [GND]
+"""
+    with pytest.raises(Exception, match="X1:NOPE not found"):
+        parse(src, return_types="harness")

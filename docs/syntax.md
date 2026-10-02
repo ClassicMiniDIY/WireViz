@@ -52,7 +52,8 @@ tweak:  # optional tweaking of .gv output
   notes: <str>   
 
   # product information (all optional)
-  ignore_in_bom: <bool>  # if set to true the connector is not added to the BOM
+  ignore_in_bom: <bool>  # if set to true the connector and its additional
+                         # components are not added to the BOM
   pn: <str>              # [internal] part number
   manufacturer: <str>    # manufacturer name
   mpn: <str>             # manufacturer part number
@@ -84,7 +85,8 @@ tweak:  # optional tweaking of .gv output
 
   # loops
   loops: <List>  # every list item is itself a list of exactly two pins
-                 # on the connector that are to be shorted
+                 # on the connector that are to be shorted;
+                 # pins may be given by number or by pin label, e.g. [VCC, SENSE]
 
   # optional tweaking of .gv output executed for each instance of this connector
   tweak:  # see tweak section below
@@ -127,7 +129,8 @@ tweak:  # optional tweaking of .gv output
   notes: <str>   
 
   # product information (all optional)
-  ignore_in_bom: <bool>  # if set to true the cable or wires are not added to the BOM
+  ignore_in_bom: <bool>  # if set to true the cable or wires and their additional
+                         # components are not added to the BOM
   pn: <str>              # [internal] part number
   manufacturer: <str>    # manufacturer name
   mpn: <str>             # manufacturer part number
@@ -551,6 +554,8 @@ Supported color codes:
 Both connectors and cables accept including an image with a caption within their respective nodes.
 
 ```yaml
+image: <path>        # short form: only the path to the image file
+
 image:
   src: <path>        # path to the image file
   # optional parameters:
@@ -563,6 +568,13 @@ image:
 ```
 
 For more fine grained control over the image parameters, please see [`advanced_image_usage.md`](advanced_image_usage.md).
+
+
+## Special characters and YAML words
+
+Text values may contain HTML tags such as `<b>`, `<i>` and `<br/>` and entities such as `&amp;` or `&#176;`. Any other `&`, `<` or `>` is escaped automatically, so `notes: R&D, < 5 V` renders as written. If text looks like a tag but is not meant as one (for example `a<b`), write `a&lt;b`.
+
+WireViz reads YAML with YAML 1.2 booleans: only `true` and `false` are booleans. Words such as `NO`, `NC`, `ON`, `OFF`, `yes` and `no` stay text, so they work as pin and wire labels without quotes. Boolean attributes such as `show_name` or `ignore_in_bom` still accept `yes`/`no`/`on`/`off`.
 
 
 ## Multiline strings

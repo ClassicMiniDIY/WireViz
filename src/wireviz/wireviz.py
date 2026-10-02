@@ -20,6 +20,7 @@ from wireviz.wv_helper import (
     get_single_key_and_value,
     is_arrow,
     smart_file_resolve,
+    yaml_load,
 )
 from wireviz.wv_safety import UNTRUSTED_MAX_INPUT_BYTES, check_untrusted_image
 
@@ -125,6 +126,8 @@ def parse(
     return_types = tuple(t.lower() for t in return_types or ())
 
     yaml_data, yaml_file, yaml_str = _get_yaml_data_and_path(inp, untrusted)
+    if yaml_data is None:
+        raise ValueError("The input is empty: it holds no YAML content")
     if not isinstance(yaml_data, dict):
         raise TypeError(
             f"Expected a dict as top-level YAML input, but got: {type(yaml_data)}"
@@ -202,8 +205,18 @@ def parse(
             if len(yaml_data[sec]) > 0:  # section has contents
                 if ty == dict:
                     for key, attribs in yaml_data[sec].items():
+                        if attribs is None:  # `X1:` with no attributes (#426)
+                            attribs = {}
+                        elif not isinstance(attribs, dict):
+                            raise TypeError(
+                                f"{sec}.{key} must be a mapping of attributes, "
+                                f"not {type(attribs).__name__}"
+                            )
                         # The Image dataclass might need to open an image file with a relative path.
                         image = attribs.get("image")
+                        if isinstance(image, str):  # `image: file.png` (#292)
+                            image = {"src": image}
+                            attribs = {**attribs, "image": image}
                         if isinstance(image, dict):
                             # Copy before rewriting src: a YAML alias may
                             # share this mapping with another component.
@@ -553,11 +566,15 @@ def _get_yaml_data_and_path(
             raise ValueError(
                 f"Input is larger than the limit of {UNTRUSTED_MAX_INPUT_BYTES} bytes"
             )
-        return yaml.safe_load(inp), None, inp
+        return yaml_load(inp), None, inp
     if isinstance(inp, Path):  # always a file; never fall back to YAML text
         yaml_path = inp.expanduser().resolve(strict=True)
         yaml_str = _read_source(yaml_path)
-        return yaml.safe_load(yaml_str), yaml_path, yaml_str
+        return yaml_load(yaml_str), yaml_path, yaml_str
+    if isinstance(inp, str) and ("\n" in inp or not inp.strip()):
+        # YAML text, never a path: a path has no line break, and an empty
+        # string would resolve to the working directory (upstream #342).
+        return yaml_load(inp), None, inp
     if not isinstance(inp, Dict):  # received a str
         try:
             yaml_path = Path(inp).expanduser().resolve(strict=True)
@@ -583,7 +600,7 @@ def _get_yaml_data_and_path(
             # The path exists, so it is a file: read errors (not UTF-8,
             # a PNG without WireViz YAML, a directory) are real errors.
             yaml_str = _read_source(yaml_path)
-        yaml_data = yaml.safe_load(yaml_str)
+        yaml_data = yaml_load(yaml_str)
     else:
         # received a Dict — deep-copy so the parsing pipeline's in-place
         # changes don't leak back to the caller. The YAML text for PNG

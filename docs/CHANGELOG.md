@@ -1,5 +1,21 @@
 # Change Log
 
+## [Unreleased]
+
+Fixes for open issues in the original [wireviz/WireViz](https://github.com/wireviz/WireViz) repository. Triage: [docs/plans/2026-10-02-upstream-issue-triage.md](plans/2026-10-02-upstream-issue-triage.md).
+
+### Bug fixes
+
+- A wire number beyond the cable's wire count, or an unknown wire label, gives a clear error ([#208](https://github.com/wireviz/WireViz/issues/208)). An unknown label used to be drawn as the shield.
+- Unquoted `NO`, `NC`, `ON`, `Yes` and similar words stay text in labels: YAML is read with YAML 1.2 booleans ([#305](https://github.com/wireviz/WireViz/issues/305)). Boolean attributes still accept `yes`/`no`/`on`/`off`.
+- A connector or cable with no attributes, an empty input file, and a comment-only file give clear errors ([#426](https://github.com/wireviz/WireViz/issues/426), [#342](https://github.com/wireviz/WireViz/issues/342)).
+- Designators that contain `:` render ([#487](https://github.com/wireviz/WireViz/issues/487)).
+- `&`, `<` and `>` in text no longer break the render; tags and entities still work ([#230](https://github.com/wireviz/WireViz/issues/230), [#266](https://github.com/wireviz/WireViz/issues/266)).
+- `ignore_in_bom` also hides the component's additional components; the diagram then lists them in full ([#300](https://github.com/wireviz/WireViz/issues/300)).
+- `colors: DIN` and other list attributes given as a single value give a clear error ([#265](https://github.com/wireviz/WireViz/issues/265)).
+- `image: file.png` works as a short form of `image: {src: file.png}` ([#292](https://github.com/wireviz/WireViz/issues/292)).
+- Loops accept pin labels ([#432](https://github.com/wireviz/WireViz/issues/432)); loops on non-sequential pin numbers have a regression test ([#465](https://github.com/wireviz/WireViz/issues/465)).
+
 ## [1.0.0] (2026-10-02)
 
 Security hardening and bug fixes from the October 2026 audit. First stable release of the fork. Design and threat model: [docs/plans/2026-10-02-october-2026-audit.md](plans/2026-10-02-october-2026-audit.md).

@@ -46,7 +46,9 @@ def get_additional_component_table(
                 "unit": part.unit,
                 "bgcolor": part.bgcolor,
             }
-            if harness.options.mini_bom_mode:
+            # A component hidden from the BOM hides its additional components
+            # too, so they have no BOM number: show them in full (#300).
+            if harness.options.mini_bom_mode and not component.ignore_in_bom:
                 id = get_bom_index(
                     harness.bom(),
                     bom_entry_key({**asdict(part), "description": part.description}),
@@ -122,8 +124,9 @@ def generate_bom(harness: "Harness") -> List[BOMEntry]:
                 }
             )
 
-        # add connectors aditional components to bom
-        bom_entries.extend(get_additional_component_bom(connector))
+            # add connectors aditional components to bom (hidden with
+            # the connector, upstream #300)
+            bom_entries.extend(get_additional_component_bom(connector))
 
     # cables
     # TODO: If category can have other non-empty values than 'bundle', maybe it should be part of description?
@@ -182,8 +185,9 @@ def generate_bom(harness: "Harness") -> List[BOMEntry]:
                         }
                     )
 
-        # add cable/bundles aditional components to bom
-        bom_entries.extend(get_additional_component_bom(cable))
+            # add cable/bundles aditional components to bom (hidden with
+            # the cable, upstream #300)
+            bom_entries.extend(get_additional_component_bom(cable))
 
     # add harness aditional components to bom directly, as they both are List[BOMEntry]
     bom_entries.extend(harness.additional_bom_items)

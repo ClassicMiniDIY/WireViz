@@ -115,5 +115,34 @@ def html_size_attr(image):
     )
 
 
+# A bare &, < or > breaks the Graphviz HTML-like label (upstream #230):
+# XML rejects a bare & or <, and the DOT parser counts angle brackets to
+# find the end of the label. Text between tags is escaped; tags (<b>,
+# <br/>, <font ...>) and entities (&amp;, &#176;) are kept, so intended
+# markup still works.
+_TAG = re.compile(r"(<[A-Za-z/!][^<>]*>)")
+_BARE_AMP = re.compile(r"&(?!(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);)")
+
+
+def escape_bare(inp):
+    """Escape &, < and > that are not part of an entity or a tag."""
+    if not isinstance(inp, str):
+        return inp
+    parts = _TAG.split(inp)
+    for i in range(0, len(parts), 2):  # even indexes are text between tags
+        text = _BARE_AMP.sub("&amp;", parts[i])
+        parts[i] = text.replace("<", "&lt;").replace(">", "&gt;")
+    return "".join(parts)
+
+
+def html_text(inp):
+    """Return a single-line value ready for a Graphviz HTML-like label."""
+    return escape_bare(remove_links(inp)) if isinstance(inp, str) else inp
+
+
 def html_line_breaks(inp):
-    return remove_links(inp).replace("\n", "<br />") if isinstance(inp, str) else inp
+    return (
+        escape_bare(remove_links(inp)).replace("\n", "<br />")
+        if isinstance(inp, str)
+        else inp
+    )

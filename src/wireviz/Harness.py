@@ -57,7 +57,7 @@ from wireviz.wv_helper import (
     tuplelist2tsv,
 )
 from wireviz.wv_html import generate_html_output
-from wireviz.wv_safety import UNTRUSTED_RENDER_TIMEOUT, sanitize_svg
+from wireviz.wv_safety import UNTRUSTED_RENDER_TIMEOUT, check_dot_images, sanitize_svg
 
 OLD_CONNECTOR_ATTR = {
     "pinout": "was renamed to 'pinlabels' in v0.2",
@@ -121,10 +121,13 @@ def _itxt_chunk(keyword: str, text: str) -> bytes:
 
 def _parse_itxt(data: bytes) -> Tuple[str, str]:
     """Return ``(keyword, text)`` from the data of an iTXt chunk."""
-    keyword, rest = data.split(b"\x00", 1)
-    compressed, method = rest[0], rest[1]
-    _language, rest = rest[2:].split(b"\x00", 1)
-    _translated, text = rest.split(b"\x00", 1)
+    try:
+        keyword, rest = data.split(b"\x00", 1)
+        compressed, method = rest[0], rest[1]
+        _language, rest = rest[2:].split(b"\x00", 1)
+        _translated, text = rest.split(b"\x00", 1)
+    except (ValueError, IndexError) as exc:
+        raise ValueError("Malformed iTXt chunk") from exc
     if compressed:
         if method != 0:
             raise ValueError(f"Unknown iTXt compression method {method}")
@@ -179,17 +182,25 @@ _DOT_PLAIN_ID = re.compile(
 )
 
 
+# One complete DOT double-quoted string (inner quotes escaped).
+_DOT_QUOTED = re.compile(r'^"(?:[^"\\]|\\.)*"$', re.S)
+
+
 def _dot_attr_value(value: str) -> str:
     """Return ``value`` ready for a DOT attribute: as-is when it is a
     plain ID, a numeral, an already-quoted string or an HTML label;
     otherwise quoted, with inner double quotes escaped."""
     if _DOT_PLAIN_ID.match(value):
         return value
-    if len(value) >= 2 and (
-        (value[0] == '"' and value[-1] == '"') or (value[0] == "<" and value[-1] == ">")
+    if _DOT_QUOTED.match(value) or (
+        len(value) >= 2 and value[0] == "<" and value[-1] == ">"
     ):
         return value
-    return '"' + value.replace('"', r"\"") + '"'
+    # Keep backslash escapes (\N, \l) but never end on a lone backslash,
+    # which would escape the closing quote.
+    if (len(value) - len(value.rstrip("\\"))) % 2:
+        value += "\\"
+    return '"' + re.sub(r'(?<!\\)"', r'\\"', value) + '"'
 
 
 def check_old(node: str, old_attr: dict, args: dict) -> None:
@@ -867,6 +878,7 @@ class Harness:
         """
         if not self.untrusted:
             return self.graph.pipe(format=fmt)
+        check_dot_images(self.graph.source, self._declared_images())
         try:
             result = subprocess.run(
                 ["dot", "-Kdot", f"-T{fmt}"],

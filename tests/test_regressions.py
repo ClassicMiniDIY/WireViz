@@ -776,3 +776,22 @@ connections:
 """
     with pytest.raises(Exception, match="X1:NOPE not found"):
         parse(src, return_types="harness")
+
+
+@pytest.mark.parametrize(
+    "value, emitted",
+    [
+        ("x\\", 'xlabel="x\\\\"'),  # trailing backslash cannot eat the quote
+        ('"a" b "c"', 'xlabel="\\"a\\" b \\"c\\""'),  # not one quoted string
+        ('"already quoted"', 'xlabel="already quoted"'),
+    ],
+)
+def test_review_tweak_value_quoting_edge_cases(value: str, emitted: str):
+    data = {
+        "connectors": {"X1": {"pincount": 1}},
+        "connections": [["X1"]],
+        "tweak": {"override": {"X1": {"xlabel": value}}},
+    }
+    h = parse(data, return_types="harness")
+    assert emitted in h.graph.source
+    assert "<svg" in h.svg

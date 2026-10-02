@@ -450,3 +450,91 @@ def test_untrusted_gallery_example_renders():
         f.read_text(), return_types="svg", image_paths=[f.parent], untrusted=True
     )
     assert svg.startswith("<?xml") and "<svg" in svg
+
+
+# ===========================================================================
+# Code review round 1 (October 2026 audit branch)
+# ===========================================================================
+
+
+def test_review_untrusted_hypertext_img_refused(tmp_path: Path):
+    """An <img> typed into a hypertext field makes Graphviz load and
+    rasterize that file into PNG/PDF output. Untrusted mode refuses it."""
+    src = f"""
+connectors:
+  X1:
+    pincount: 1
+    notes: '<table><tr><td><img src="{TRS}"/></td></tr></table>'
+connections: [[X1]]
+"""
+    for fmt in ("png", "svg"):
+        with pytest.raises(ValueError, match="image: src"):
+            parse(src, return_types=fmt, untrusted=True)
+
+
+def test_review_untrusted_declared_image_still_renders_png(tmp_path: Path):
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    png = parse(
+        _image_yaml("pic.png"),
+        return_types="png",
+        image_paths=[tmp_path],
+        untrusted=True,
+    )
+    assert png.startswith(b"\x89PNG")
+
+
+def test_review_html_fragment_escapes_quotes():
+    """Values also land inside attributes in the templates."""
+    from wireviz.wv_safety import sanitize_html_fragment
+
+    assert '"' not in sanitize_html_fragment('a"b')
+
+
+@pytest.mark.parametrize("key", ["fontname", "bgcolor"])
+def test_review_untrusted_metadata_cannot_replace_builtin_placeholder(key: str):
+    src = f"""
+metadata:
+  {key}: 'x" data-injected="1'
+connectors: {{X1: {{pincount: 1}}}}
+connections: [[X1]]
+"""
+    page = parse(src, return_types="harness", untrusted=True)._render(("html",))["html"]
+    assert "data-injected" not in page
+
+
+def test_review_untrusted_sheetsize_must_be_bare():
+    src = """
+metadata:
+  template: {name: din-6771, sheetsize: 'A4" data-injected="1'}
+connectors: {X1: {pincount: 1}}
+connections: [[X1]]
+"""
+    harness = parse(src, return_types="harness", untrusted=True)
+    with pytest.raises(ValueError, match="sheetsize"):
+        harness._render(("html",))
+
+
+def test_review_sanitize_svg_checks_both_image_hrefs():
+    from wireviz.wv_safety import sanitize_svg
+
+    dirty = (
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        'xmlns:xlink="http://www.w3.org/1999/xlink">'
+        '<image xlink:href="data:image/png;base64,AAAA" href="https://evil.example/x.png"/>'
+        "</svg>"
+    )
+    assert "evil.example" not in sanitize_svg(dirty)
+
+
+def test_review_fontname_trailing_newline_rejected():
+    from wireviz.wv_safety import check_fontname
+
+    with pytest.raises(ValueError):
+        check_fontname("arial\n")
+
+
+def test_review_malformed_itxt_raises_valueerror():
+    from wireviz.Harness import _parse_itxt
+
+    with pytest.raises(ValueError, match="Malformed"):
+        _parse_itxt(b"wireviz:yaml")

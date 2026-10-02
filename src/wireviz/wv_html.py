@@ -51,6 +51,10 @@ def generate_html_output(
     # load HTML template
     templatename = (metadata.get("template") or {}).get("name")
     builtin_template_dir = Path(__file__).parent / "templates"
+    sheetsize = (metadata.get("template") or {}).get("sheetsize", "")
+    if untrusted and sheetsize:
+        # used as a CSS class name in the templates
+        check_template_name(sheetsize, "metadata.template.sheetsize")
     if templatename:
         if untrusted:
             check_template_name(templatename)
@@ -158,6 +162,11 @@ def generate_html_output(
     # prepare metadata replacements
     if metadata:
         for item, contents in metadata.items():
+            # In untrusted mode a metadata key must not replace a built-in
+            # placeholder (fontname, bgcolor, diagram, ...): those sit in
+            # attribute or style contexts in the templates.
+            if untrusted and f"<!-- %{item}% -->" in replacements:
+                continue
             if isinstance(contents, (str, int, float)):
                 replacements[f"<!-- %{item}% -->"] = clean(
                     html_line_breaks(str(contents))

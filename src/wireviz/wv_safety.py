@@ -17,7 +17,7 @@ import re
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, List, Sequence, Union
+from typing import Any, List, Sequence, Set, Union
 
 # Upper bound for one pin/wire range (``[1-10000]``) and for
 # ``pincount`` / ``wirecount``. Applies to all callers.
@@ -32,7 +32,7 @@ FONTNAME_PATTERN = re.compile(r"^[\w][\w ,.\-]*$")
 def check_fontname(fontname: str) -> str:
     """Return ``fontname`` unchanged, or raise ValueError if it holds
     characters that could break out of an SVG or HTML attribute."""
-    if not isinstance(fontname, str) or not FONTNAME_PATTERN.match(fontname):
+    if not isinstance(fontname, str) or not FONTNAME_PATTERN.fullmatch(fontname):
         raise ValueError(
             f"options.fontname {fontname!r} is not a valid font name "
             "(allowed: letters, digits, space, comma, period, hyphen, underscore)"
@@ -96,11 +96,32 @@ def check_untrusted_image(
     return candidate
 
 
-def check_template_name(name: str) -> str:
+# <img> tags in Graphviz HTML-like labels. Graphviz loads the file for
+# every output format (PNG and PDF rasterize it), so untrusted input may
+# only reference images that passed check_untrusted_image().
+_DOT_IMG_TAG = re.compile(r"<\s*img\b[^>]*>", re.IGNORECASE)
+_DOT_IMG_SRC = re.compile(r"\bsrc\s*=\s*(?:\"([^\"]*)\"|'([^']*)')", re.IGNORECASE)
+
+
+def check_dot_images(dot_source: str, allowed: Set[Path]) -> None:
+    """Raise ValueError if the DOT source loads any image file that is
+    not in ``allowed`` (for example an ``<img>`` typed into ``notes``)."""
+    for tag in _DOT_IMG_TAG.findall(dot_source):
+        m = _DOT_IMG_SRC.search(tag)
+        src = ""
+        if m:
+            src = html.unescape(m.group(1) if m.group(1) is not None else m.group(2))
+        if not src or Path(src).resolve() not in allowed:
+            raise ValueError(
+                "Images may only be added with image: src:, not with <img> in text"
+            )
+
+
+def check_template_name(name: str, field: str = "metadata.template.name") -> str:
     """Return ``name`` or raise ValueError if it is not a bare name."""
-    if not isinstance(name, str) or not TEMPLATE_NAME_PATTERN.match(name):
+    if not isinstance(name, str) or not TEMPLATE_NAME_PATTERN.fullmatch(name):
         raise ValueError(
-            f"metadata.template.name {name!r} must be a bare name "
+            f"{field} {name!r} must be a bare name "
             "(letters, digits, hyphen, underscore)"
         )
     return name
@@ -174,8 +195,9 @@ def sanitize_svg(svg: str) -> str:
                 elem.remove(child)
                 continue
             if local(child.tag) == "image":
-                href = child.get(f"{{{_XLINK_NS}}}href") or child.get("href") or ""
-                if not href.startswith("data:image/"):
+                # Browsers may use either attribute; both must be inline data.
+                hrefs = [v for a, v in child.attrib.items() if a in _HREF_ATTRS]
+                if not hrefs or not all(h.startswith("data:image/") for h in hrefs):
                     elem.remove(child)
                     continue
             clean(child)
@@ -264,7 +286,8 @@ class _FragmentSanitizer(HTMLParser):
 
     def handle_data(self, data):
         if not self.skip:
-            self.out.append(html.escape(data, quote=False))
+            # quote=True: templates also put values inside attributes.
+            self.out.append(html.escape(data, quote=True))
 
 
 def sanitize_html_fragment(fragment: Any) -> str:

@@ -132,7 +132,9 @@ ColorScheme = str  # Color scheme name = Literal[COLOR_CODES.keys()]
 def get_color_hex(input: Colors, pad: bool = False) -> List[str]:
     """Return list of hex colors from either a string of color names or :-separated hex colors."""
     if input is None or input == "":
-        return [color_default]
+        # No color: one default stripe, padded below like any other
+        # single-color wire.
+        output = [color_default]
     elif input[0] == "#":  # Hex color(s)
         output = input.split(":")
         for i, c in enumerate(output):

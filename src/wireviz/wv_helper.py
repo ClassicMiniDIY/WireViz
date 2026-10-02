@@ -29,12 +29,20 @@ awg_equiv_table = {
 mm2_equiv_table = {v: k for k, v in awg_equiv_table.items()}
 
 
+def _gauge_key(value) -> str:
+    """Table key for a gauge value: 1.0, "1.0" and 1 all become "1"."""
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def awg_equiv(mm2):
-    return awg_equiv_table.get(str(mm2), "Unknown")
+    return awg_equiv_table.get(_gauge_key(mm2), "Unknown")
 
 
 def mm2_equiv(awg):
-    return mm2_equiv_table.get(str(awg), "Unknown")
+    return mm2_equiv_table.get(_gauge_key(awg), "Unknown")
 
 
 def expand(yaml_data):

@@ -400,9 +400,10 @@ See [HTML Output Templates](../src/wireviz/templates/) for how metadata entries 
   template_separator: <str>    # Default = '.'
 
   # Graphviz dpi attribute (https://graphviz.org/docs/attrs/dpi/).
-  # Controls the resolution of raster (PNG) output and the size unit of
-  # vector (SVG) output.
-  output_dpi: <float>          # Default = 96.0
+  # Controls the resolution of raster (PNG) output. Graphviz also scales
+  # vector (SVG, PDF) output by dpi/72 when it is set. When omitted,
+  # PNG renders at 96 dpi and SVG/PDF at true size.
+  output_dpi: <float>          # Default = not set
 ```
 
 

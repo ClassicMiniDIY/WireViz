@@ -140,10 +140,10 @@ def test_cable_tweak_dict_coerced_to_tweak():
 
 
 def test_options_default_dpi():
-    """``output_dpi`` defaults to 96.0 — Graphviz's own default for
-    non-PostScript renderers, so existing harnesses are unchanged."""
+    """``output_dpi`` defaults to None (October 2026 audit, bug 2): no
+    dpi attribute, so output is identical to v0.4.1."""
     o = Options()
-    assert o.output_dpi == 96.0
+    assert o.output_dpi is None
 
 
 def test_options_dpi_can_be_none():

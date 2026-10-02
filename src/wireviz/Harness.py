@@ -169,6 +169,23 @@ def read_yaml_from_png(png: Union[str, Path, BinaryIO]) -> Optional[str]:
     return None
 
 
+# A DOT ID that needs no quotes: an identifier or a numeral.
+_DOT_PLAIN_ID = re.compile(r"^([A-Za-z_\x80-\uffff][\w\x80-\uffff]*|-?(\.\d+|\d+(\.\d*)?))$")
+
+
+def _dot_attr_value(value: str) -> str:
+    """Return ``value`` ready for a DOT attribute: as-is when it is a
+    plain ID, a numeral, an already-quoted string or an HTML label;
+    otherwise quoted, with inner double quotes escaped."""
+    if _DOT_PLAIN_ID.match(value):
+        return value
+    if len(value) >= 2 and (
+        (value[0] == '"' and value[-1] == '"') or (value[0] == "<" and value[-1] == ">")
+    ):
+        return value
+    return '"' + value.replace('"', r"\"") + '"'
+
+
 def check_old(node: str, old_attr: dict, args: dict) -> None:
     """Raise exception for any outdated attributes in args."""
     for attr, descr in old_attr.items():
@@ -476,7 +493,8 @@ class Harness:
             html = []
 
             awg_fmt = ""
-            if cable.show_equiv:
+            # gauge_unit is None when no gauge is given (upstream #497/#498).
+            if cable.show_equiv and isinstance(cable.gauge_unit, str):
                 # Only convert units we actually know about, i.e. currently
                 # mm2 and awg --- other units _are_ technically allowed,
                 # and passed through as-is.
@@ -770,7 +788,9 @@ class Harness:
                         for attr, value in self.tweak.override[keyword].items():
                             if value is None:
                                 entry, n_subs = re.subn(
-                                    f'( +)?{attr}=("[^"]*"|[^] ]*)(?(1)| *)', "", entry
+                                    f'( +)?{re.escape(attr)}=("[^"]*"|[^] ]*)(?(1)| *)',
+                                    "",
+                                    entry,
                                 )
                                 if n_subs < 1:
                                     sys.stderr.write(
@@ -782,15 +802,19 @@ class Harness:
                                     )
                                 continue
 
-                            if len(value) == 0 or " " in value:
-                                value = value.replace('"', r"\"")
-                                value = f'"{value}"'
+                            value = _dot_attr_value(value)
+                            # Replacement functions, not strings: the value
+                            # is literal text (it may hold \N, \l, ...).
                             entry, n_subs = re.subn(
-                                f'{attr}=("[^"]*"|[^] ]*)', f"{attr}={value}", entry
+                                f'{re.escape(attr)}=("[^"]*"|[^] ]*)',
+                                lambda _m: f"{attr}={value}",
+                                entry,
                             )
                             if n_subs < 1:
                                 # If attr not found, then append it
-                                entry = re.sub(r"\]$", f" {attr}={value}]", entry)
+                                entry = re.sub(
+                                    r"\]$", lambda _m: f" {attr}={value}]", entry
+                                )
                             elif n_subs > 1:
                                 sys.stderr.write(
                                     f"Harness.create_graph() warning: {attr} overridden {n_subs} times in {keyword}!\n"

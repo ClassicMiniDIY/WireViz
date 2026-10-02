@@ -222,17 +222,24 @@ connections:
     assert "None" not in gv
 
 
-def test_pr379_default_dpi_is_96(workdir: Path, minimal_yaml: Path):
-    """Default ``Options.output_dpi`` is 96.0 (graphviz default for
-    non-PostScript), so existing harnesses are unchanged."""
+def test_pr379_default_dpi_omitted(workdir: Path, minimal_yaml: Path):
+    """October 2026 audit, bug 2. The v0.5.0 default of 96.0 scaled
+    SVG/PDF by 96/72. The default is now no dpi attribute: SVG/PDF at
+    true size and PNG at Graphviz's 96 dpi, identical to v0.4.1."""
     parse(
         minimal_yaml,
-        output_formats=("gv",),
+        output_formats=("gv", "svg"),
         output_dir=workdir,
         output_name="default",
     )
     gv = (workdir / "default.gv").read_text()
-    assert "dpi=96.0" in gv
+    assert "dpi=" not in gv
+    svg_96 = parse(
+        minimal_yaml.read_text().replace("connectors:", "options: {output_dpi: 96}\nconnectors:", 1),
+        return_types="svg",
+    )
+    width = lambda svg: float(re.search(r'<svg width="([\d.]+)pt"', svg)[1])
+    assert width(svg_96) == pytest.approx(width((workdir / "default.svg").read_text()) * 96 / 72, rel=0.02)
 
 
 # ===========================================================================
@@ -673,3 +680,53 @@ def test_audit_19_empty_format_is_usage_error(runner, minimal_yaml: Path):
     result = runner.invoke(cli, ["-f", "", str(minimal_yaml)])
     assert result.exit_code == 2
     assert "No output format" in result.stderr
+
+
+# ===========================================================================
+# October 2026 audit — rendering bugs
+# ===========================================================================
+
+
+def test_audit_13_uncolored_wire_is_padded():
+    """[13] A wire with no color gets the same stripe count as other
+    single-color wires when padding is on."""
+    assert len(get_color_hex("", pad=True)) == len(get_color_hex("RD", pad=True)) == 3
+    assert len(get_color_hex("", pad=False)) == 1
+
+
+def test_audit_14_show_equiv_without_gauge():
+    """[14] Upstream #497 / PR #498: show_equiv with no gauge crashed."""
+    src = "cables: {W1: {wirecount: 1, show_equiv: true}}\nconnections: [[W1]]\n"
+    assert "<svg" in parse(src, return_types="svg")
+
+
+@pytest.mark.parametrize("gauge, expected", [(1.0, "18 AWG"), ("1.0 mm2", "18 AWG"), (0.5, "21 AWG")])
+def test_audit_14_float_gauge_lookup(gauge, expected):
+    """[14] gauge 1.0 used to show "(Unknown AWG)"."""
+    src = (
+        f"cables: {{W1: {{wirecount: 1, gauge: {gauge!r}, show_equiv: true}}}}\n"
+        "connections: [[W1]]\n"
+    )
+    assert expected in parse(src, return_types="harness").graph.source
+
+
+@pytest.mark.parametrize(
+    "value, emitted",
+    [
+        ('"\\N left\\l"', 'xlabel="\\N left\\l"'),  # backslashes kept literally
+        ("#ff0000", 'xlabel="#ff0000"'),  # not a plain ID -> quoted
+        ("red", "xlabel=red"),
+        ("a b", 'xlabel="a b"'),
+    ],
+)
+def test_audit_15_tweak_override_values(value: str, emitted: str):
+    """[15] Override values are inserted literally and quoted when DOT
+    needs quotes."""
+    data = {
+        "connectors": {"X1": {"pincount": 1}},
+        "connections": [["X1"]],
+        "tweak": {"override": {"X1": {"xlabel": value}}},
+    }
+    h = parse(data, return_types="harness")
+    assert emitted in h.graph.source
+    assert "<svg" in h.svg

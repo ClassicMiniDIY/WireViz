@@ -7,7 +7,7 @@ jobs:
     strategy:
       max-parallel: 6
       matrix:
-        # Python 3.7 and 3.8 are end-of-life and were dropped in 0.6.0
+        # Python 3.7 and 3.8 are end-of-life and were dropped in 1.0.0
         # (setup.py python_requires=">=3.9").
         os: [ubuntu-latest]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]

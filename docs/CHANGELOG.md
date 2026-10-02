@@ -1,8 +1,8 @@
 # Change Log
 
-## [0.6.0] (unreleased)
+## [1.0.0] (unreleased)
 
-Security hardening and bug fixes from the October 2026 audit. Design and threat model: [docs/plans/2026-10-02-october-2026-audit.md](plans/2026-10-02-october-2026-audit.md).
+Security hardening and bug fixes from the October 2026 audit. First stable release of the fork. Design and threat model: [docs/plans/2026-10-02-october-2026-audit.md](plans/2026-10-02-october-2026-audit.md).
 
 ### Security
 

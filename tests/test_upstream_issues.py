@@ -263,3 +263,82 @@ connectors:
     source = parse(src, return_types="harness").graph.source
     assert "X1:p6" in source and "X1:p7" in source
     assert "X1:p9" not in source
+
+
+# ---------------------------------------------------------------------------
+# Batch A review round 1
+# ---------------------------------------------------------------------------
+
+
+def test_issue300_part_can_override_parent_ignore_in_bom():
+    """A hidden device-side connector may still need its terminals."""
+    src = """
+connectors:
+  ECU:
+    pincount: 2
+    ignore_in_bom: true
+    additional_components:
+      - {type: Crimp terminal, mpn: T-123, qty_multiplier: populated, ignore_in_bom: false}
+      - {type: Seal}
+  X2:
+    pincount: 2
+    additional_components:
+      - {type: Boot, ignore_in_bom: yes}
+cables: {W1: {wirecount: 2}}
+connections:
+  - - ECU: [1, 2]
+    - W1: [1, 2]
+    - X2: [1, 2]
+"""
+    h = parse(src, return_types="harness")
+    descriptions = [row[1] for row in bom_list(h.bom())[1:]]
+    assert "Crimp terminal" in descriptions
+    assert "Seal" not in descriptions and "Boot" not in descriptions
+
+
+@pytest.mark.parametrize(
+    "label", ["<VBAT>", "x<y and z>w", "a&b;c", "<!-- 1_in -->", "&bogus;"]
+)
+def test_issue230_tag_like_text_is_escaped(label: str):
+    src = f"""
+connectors:
+  X1: {{pinlabels: ['{label}']}}
+cables:
+  W1: {{wirecount: 1, wirelabels: ['{label}'], gauge: '1 mm&sup', length: '1 <m'}}
+connections:
+  - - X1: [1]
+    - W1: [1]
+"""
+    assert "<svg" in parse(src, return_types="svg")
+
+
+def test_issue208_shield_on_unshielded_cable():
+    src = """
+connectors: {X1: {pincount: 1}}
+cables: {W1: {wirecount: 1}}
+connections:
+  - - X1: [1]
+    - W1: [s]
+"""
+    with pytest.raises(ValueError, match="W1:s is used, but W1 has no shield"):
+        parse(src, return_types="harness")
+
+
+def test_quoted_numeric_wire_and_pin_labels():
+    src = """
+connectors: {X1: {pinlabels: ['10', '20']}}
+cables: {W1: {wirecount: 2, wirelabels: ['10', '20']}}
+connections:
+  - - X1: ['20', '10']
+    - W1: ['10', '20']
+"""
+    h = parse(src, return_types="harness")
+    assert [(c.from_pin, c.via_port) for c in h.cables["W1"].connections] == [
+        (2, 1),
+        (1, 2),
+    ]
+
+
+def test_empty_cable_error_names_the_cable():
+    with pytest.raises(Exception, match="Cable W1: unknown number of wires"):
+        parse("cables:\n  W1:\nconnections: [[W1]]\n", return_types="harness")

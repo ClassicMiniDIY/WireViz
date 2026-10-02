@@ -360,6 +360,15 @@ class Harness:
                     )
                 # list index starts at 0, wire IDs start at 1
                 via_wire = cable.colors.index(via_wire) + 1
+            elif (
+                isinstance(via_wire, int)
+                and not 1 <= via_wire <= cable.wirecount
+                and [str(label) for label in cable.wirelabels].count(str(via_wire)) == 1
+            ):
+                # A quoted numeric label ('10') arrives as the number 10.
+                via_wire = [str(label) for label in cable.wirelabels].index(
+                    str(via_wire)
+                ) + 1
             elif via_wire in cable.wirelabels:
                 if cable.wirelabels.count(via_wire) > 1:
                     raise Exception(
@@ -379,6 +388,8 @@ class Harness:
                     )
             elif via_wire != "s":
                 raise ValueError(f"{via_name}:{via_wire} not found.")
+            elif not cable.shield:
+                raise ValueError(f"{via_name}:s is used, but {via_name} has no shield.")
 
         # perform the actual connection
         self.cables[via_name].connect(from_name, from_pin, via_wire, to_name, to_pin)
@@ -565,9 +576,9 @@ class Harness:
                         cable.spn if not isinstance(cable.spn, list) else None))],
                     [html_line_breaks(cable.type),
                      f'{cable.wirecount}x' if cable.show_wirecount else None,
-                     f'{cable.gauge} {cable.gauge_unit}{awg_fmt}' if cable.gauge else None,
+                     f'{cable.gauge} {html_text(cable.gauge_unit)}{awg_fmt}' if cable.gauge else None,
                      '+ S' if cable.shield else None,
-                     f'{cable.length} {cable.length_unit}' if cable.length > 0 else None,
+                     f'{cable.length} {html_text(cable.length_unit)}' if cable.length > 0 else None,
                      translate_color(cable.color, self.options.color_mode) if cable.color else None,
                      html_colorbar(cable.color)],
                     '<!-- wire table -->',

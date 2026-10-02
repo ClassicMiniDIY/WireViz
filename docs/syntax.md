@@ -448,6 +448,8 @@ Parts can be added to a connector or cable in the section `<additional-component
   supplier: <str>      # supplier name  
   spn: <str>           # supplier part number
   bgcolor: <color>     # Background color of entry in diagram component box
+  ignore_in_bom: <bool>  # defaults to the parent's ignore_in_bom; set false to keep
+                         # this part in the BOM when its connector/cable is hidden
 ```
 
 Alternatively items can be added to just the BOM by putting them in the section `<bom-item>` above.

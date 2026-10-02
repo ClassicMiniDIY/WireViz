@@ -10,8 +10,9 @@ Fixes for open issues in the original [wireviz/WireViz](https://github.com/wirev
 - Unquoted `NO`, `NC`, `ON`, `Yes` and similar words stay text in labels: YAML is read with YAML 1.2 booleans ([#305](https://github.com/wireviz/WireViz/issues/305)). Boolean attributes still accept `yes`/`no`/`on`/`off`.
 - A connector or cable with no attributes, an empty input file, and a comment-only file give clear errors ([#426](https://github.com/wireviz/WireViz/issues/426), [#342](https://github.com/wireviz/WireViz/issues/342)).
 - Designators that contain `:` render ([#487](https://github.com/wireviz/WireViz/issues/487)).
-- `&`, `<` and `>` in text no longer break the render; tags and entities still work ([#230](https://github.com/wireviz/WireViz/issues/230), [#266](https://github.com/wireviz/WireViz/issues/266)).
-- `ignore_in_bom` also hides the component's additional components; the diagram then lists them in full ([#300](https://github.com/wireviz/WireViz/issues/300)).
+- `&`, `<` and `>` in text no longer break the render; Graphviz tags (`<b>`, `<br/>`, `<font>`, ...) and HTML entities still work, while text such as `<VBAT>` is shown as written ([#230](https://github.com/wireviz/WireViz/issues/230), [#266](https://github.com/wireviz/WireViz/issues/266)).
+- Using wire `s` on a cable without a shield is an error. Quoted numeric labels (`'10'`) can be used in connections.
+- `ignore_in_bom` also hides the component's additional components; the diagram then lists them in full ([#300](https://github.com/wireviz/WireViz/issues/300)). **Behavior change:** to keep a part such as a crimp terminal in the BOM under a hidden connector, set `ignore_in_bom: false` on that additional component.
 - `colors: DIN` and other list attributes given as a single value give a clear error ([#265](https://github.com/wireviz/WireViz/issues/265)).
 - `image: file.png` works as a short form of `image: {src: file.png}` ([#292](https://github.com/wireviz/WireViz/issues/292)).
 - Loops accept pin labels ([#432](https://github.com/wireviz/WireViz/issues/432)); loops on non-sequential pin numbers have a regression test ([#465](https://github.com/wireviz/WireViz/issues/465)).

@@ -32,7 +32,9 @@ def test_connector_simple_style_caps_pincount_to_1():
 
 
 def test_connector_simple_style_rejects_multi_pin():
-    with pytest.raises(Exception, match="simple may only have one pin"):
+    with pytest.raises(
+        Exception, match="Connector X1: style simple allows only one pin"
+    ):
         Connector(name="X1", style="simple", pincount=2)
 
 

@@ -295,7 +295,8 @@ class Connector:
         if self.style == "simple":
             if self.pincount and self.pincount > 1:
                 raise Exception(
-                    "Connectors with style set to simple may only have one pin"
+                    f"Connector {self.name}: style simple allows only one pin, "
+                    f"but pincount is {self.pincount}"
                 )
             self.pincount = 1
 
@@ -560,7 +561,8 @@ class Cable:
         else:  # wirecount implicit in length of color list
             if not self.colors:
                 raise Exception(
-                    f"Cable {self.name}: unknown number of wires. Must specify wirecount or colors (implicit length)"
+                    f"Cable {self.name}: unknown number of wires. Set wirecount or colors, "
+                    "or connect it by wire number (e.g. W1: [1-4])"
                 )
             self.wirecount = len(self.colors)
 

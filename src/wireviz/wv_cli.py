@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import click
+import yaml
 
 if __name__ == "__main__":
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -89,6 +90,12 @@ epilog += ", ".join([f"{key} ({value.upper()})" for key, value in format_codes.i
     "cables:). Repeatable.",
 )
 @click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Show a Python traceback for errors in the input.",
+)
+@click.option(
     "-V",
     "--version",
     is_flag=True,
@@ -104,6 +111,7 @@ def wireviz(
     template_dir,
     embed_yaml,
     disable_keys,
+    debug,
     version,
 ):
     """
@@ -248,19 +256,29 @@ def wireviz(
                 err=True,
             )
 
-        wv.parse(
-            yaml_input,
-            output_formats=output_formats,
-            output_dir=_output_dir,
-            output_name=_output_name,
-            image_paths=image_paths,
-            source_path=file,
-            template_dir=template_dir,
-            embed_yaml=embed_yaml,
-            disable_keys=disable_keys,
-        )
+        try:
+            _parse_for_cli(
+                yaml_input,
+                output_formats=output_formats,
+                output_dir=_output_dir,
+                output_name=_output_name,
+                image_paths=image_paths,
+                source_path=file,
+                template_dir=template_dir,
+                embed_yaml=embed_yaml,
+                disable_keys=disable_keys,
+            )
+        except (ValueError, TypeError, yaml.YAMLError, FileNotFoundError) as exc:
+            # An error in the input: one clear line, no traceback (#505).
+            if debug:
+                raise
+            raise click.ClickException(f"{file}: {exc}") from exc
 
     click.echo("", err=True)
+
+
+def _parse_for_cli(*args, **kwargs):
+    return wv.parse(*args, **kwargs)
 
 
 if __name__ == "__main__":

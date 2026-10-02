@@ -3,6 +3,7 @@
 import base64
 import re
 import struct
+import subprocess
 import sys
 import zlib
 from collections import Counter
@@ -55,6 +56,7 @@ from wireviz.wv_helper import (
     tuplelist2tsv,
 )
 from wireviz.wv_html import generate_html_output
+from wireviz.wv_safety import UNTRUSTED_RENDER_TIMEOUT, sanitize_svg
 
 OLD_CONNECTOR_ATTR = {
     "pinout": "was renamed to 'pinlabels' in v0.2",
@@ -180,6 +182,10 @@ class Harness:
     options: Options
     tweak: Tweak
     source_path: Path = None
+    # True when the YAML came from an untrusted source; see
+    # parse(untrusted=...). _render then sanitizes SVG and HTML output
+    # and runs Graphviz with a timeout.
+    untrusted: bool = False
 
     def __post_init__(self):
         self.connectors = {}
@@ -817,6 +823,31 @@ class Harness:
             self._graph = self.create_graph()
         return self._graph  # return cached graph
 
+    def _pipe(self, fmt: str) -> bytes:
+        """Run Graphviz on the harness graph and return the output.
+
+        In untrusted mode Graphviz runs as a subprocess with a timeout,
+        because the graphviz package's ``pipe()`` cannot stop it.
+        """
+        if not self.untrusted:
+            return self.graph.pipe(format=fmt)
+        try:
+            result = subprocess.run(
+                ["dot", "-Kdot", f"-T{fmt}"],
+                input=self.graph.source.encode("utf-8"),
+                capture_output=True,
+                timeout=UNTRUSTED_RENDER_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Graphviz did not finish within {UNTRUSTED_RENDER_TIMEOUT} s"
+            ) from exc
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Graphviz failed: " + result.stderr.decode("utf-8", "replace").strip()
+            )
+        return result.stdout
+
     @property
     def png(self):
         return self._render(("png",))["png"]
@@ -975,22 +1006,24 @@ class Harness:
             # some user text into the SVG unescaped, so any other <image>
             # reference may point at an arbitrary local file.
             svg_str = embed_svg_images(
-                graph.pipe(format="svg").decode("utf-8"),
+                self._pipe("svg").decode("utf-8"),
                 self._image_base_path(),
                 allowed_paths=self._declared_images(),
             )
+            if self.untrusted:
+                svg_str = sanitize_svg(svg_str)
             if "svg" in fmt:
                 outputs["svg"] = svg_str
 
         png_bytes: Optional[bytes] = None
         if "png" in fmt:
-            png_bytes = graph.pipe(format="png")
+            png_bytes = self._pipe("png")
             if yaml_source is not None:
                 png_bytes = _embed_yaml_in_png(png_bytes, yaml_source)
             outputs["png"] = png_bytes
 
         if "pdf" in fmt:
-            outputs["pdf"] = graph.pipe(format="pdf")
+            outputs["pdf"] = self._pipe("pdf")
 
         if "gv" in fmt:
             outputs["gv"] = graph.source
@@ -1018,6 +1051,7 @@ class Harness:
                     png_b64=png_b64,
                     source_path=self.source_path,
                     template_dir=template_dir,
+                    untrusted=self.untrusted,
                 )
 
         return outputs

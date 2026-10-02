@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import re
+from html import escape
 from pathlib import Path
 from typing import Callable, Dict, List, Union
 
@@ -8,6 +9,7 @@ from wireviz import APP_NAME, APP_URL, __version__, wv_colors
 from wireviz.DataClasses import Metadata, Options
 from wireviz.svgembed import data_URI_base64
 from wireviz.wv_gv_html import html_line_breaks
+from wireviz.wv_safety import check_template_name, sanitize_html_fragment
 from wireviz.wv_helper import (
     file_read_text,
     flatten2d,
@@ -40,11 +42,19 @@ def generate_html_output(
     png_b64: Union[str, None] = None,
     source_path: Union[str, Path, None] = None,
     template_dir: Union[str, Path, None] = None,
+    untrusted: bool = False,
 ) -> str:
+    # In untrusted mode every user-supplied value is sanitized before it
+    # goes into the template; otherwise values are inserted as-is
+    # (WireViz hypertext fields may hold HTML by design).
+    clean = sanitize_html_fragment if untrusted else (lambda v: v)
+
     # load HTML template
-    templatename = metadata.get("template", {}).get("name")
+    templatename = (metadata.get("template") or {}).get("name")
     builtin_template_dir = Path(__file__).parent / "templates"
     if templatename:
+        if untrusted:
+            check_template_name(templatename)
         # custom template lookup order, highest priority first:
         #   1. explicit template_dir (CLI -t / parse template_dir)
         #   2. YAML source directory (source_path.parent)
@@ -83,7 +93,7 @@ def generate_html_output(
     bom_header_html = "  <tr>\n"
     for item in bom[0]:
         th_class = f"bom_col_{item.lower()}"
-        bom_header_html = f'{bom_header_html}    <th class="{th_class}">{item}</th>\n'
+        bom_header_html = f'{bom_header_html}    <th class="{th_class}">{clean(item)}</th>\n'
     bom_header_html = f"{bom_header_html}  </tr>\n"
 
     # generate BOM contents
@@ -92,7 +102,7 @@ def generate_html_output(
         row_html = "  <tr>\n"
         for i, item in enumerate(row):
             td_class = f"bom_col_{bom[0][i].lower()}"
-            row_html = f'{row_html}    <td class="{td_class}">{item}</td>\n'
+            row_html = f'{row_html}    <td class="{td_class}">{clean(item)}</td>\n'
         row_html = f"{row_html}  </tr>\n"
         bom_contents.append(row_html)
 
@@ -116,7 +126,7 @@ def generate_html_output(
     # prepare simple replacements
     replacements = {
         "<!-- %generator% -->": f"{APP_NAME} {__version__} - {APP_URL}",
-        "<!-- %fontname% -->": options.fontname,
+        "<!-- %fontname% -->": escape(options.fontname),
         "<!-- %bgcolor% -->": wv_colors.translate_color(options.bgcolor, "hex"),
         "<!-- %filename% -->": full_filename,
         "<!-- %filename_stem% -->": filename_stem,
@@ -124,10 +134,10 @@ def generate_html_output(
         "<!-- %bom_reversed% -->": bom_html_reversed,
         "<!-- %sheet_current% -->": "1",  # TODO: handle multi-page documents
         "<!-- %sheet_total% -->": "1",  # TODO: handle multi-page documents
-        "<!-- %template_sheetsize% -->": metadata.get("template", {}).get(
-            "sheetsize", ""
+        "<!-- %template_sheetsize% -->": clean(
+            (metadata.get("template") or {}).get("sheetsize", "")
         ),
-        "<!-- %revision% -->": _latest_revision(metadata),
+        "<!-- %revision% -->": clean(_latest_revision(metadata)),
     }
 
     def replacement_if_used(key: str, func: Callable[[], str]) -> None:
@@ -148,15 +158,19 @@ def generate_html_output(
     if metadata:
         for item, contents in metadata.items():
             if isinstance(contents, (str, int, float)):
-                replacements[f"<!-- %{item}% -->"] = html_line_breaks(str(contents))
+                replacements[f"<!-- %{item}% -->"] = clean(
+                    html_line_breaks(str(contents))
+                )
             elif isinstance(contents, Dict):  # useful for authors, revisions
                 for index, (category, entry) in enumerate(contents.items()):
                     if isinstance(entry, Dict):
-                        replacements[f"<!-- %{item}_{index+1}% -->"] = str(category)
+                        replacements[f"<!-- %{item}_{index+1}% -->"] = clean(
+                            str(category)
+                        )
                         for entry_key, entry_value in entry.items():
                             replacements[
                                 f"<!-- %{item}_{index+1}_{entry_key}% -->"
-                            ] = html_line_breaks(str(entry_value))
+                            ] = clean(html_line_breaks(str(entry_value)))
                     elif isinstance(entry, (str, int, float)):
                         pass  # TODO?: replacements[f"<!-- %{item}_{category}% -->"] = html_line_breaks(str(entry))
 

@@ -14,6 +14,7 @@ if __name__ == "__main__":
 
 from wireviz.DataClasses import Metadata, Options, Tweak
 from wireviz.Harness import Harness
+from wireviz.wv_safety import UNTRUSTED_MAX_INPUT_BYTES, check_untrusted_image
 from wireviz.wv_helper import (
     expand,
     file_read_text,
@@ -31,10 +32,11 @@ def parse(
     output_formats: Union[None, str, Tuple[str]] = None,
     output_dir: Union[str, Path] = None,
     output_name: Union[None, str] = None,
-    image_paths: Union[Path, str, List] = [],
+    image_paths: Union[Path, str, List, None] = None,
     source_path: Union[Path, str, None] = None,
     template_dir: Union[Path, str, None] = None,
     embed_yaml: bool = True,
+    untrusted: bool = False,
 ) -> Any:
     """
     This function takes an input, parses it as a WireViz Harness file,
@@ -95,6 +97,14 @@ def parse(
             source is embedded in the PNG as an iTXt chunk under the
             ``wireviz:yaml`` key for round-trip editing. Set to False
             to render plain PNGs without source-bearing metadata.
+        untrusted (bool, optional):
+            Set to True when the YAML comes from someone other than the
+            caller (for example, a web request). Then: a ``str`` input is
+            always YAML text, never a path; the input size is capped;
+            ``image.src`` must be relative and inside ``image_paths``;
+            ``metadata.template.name`` must be a bare name; ``tweak`` is
+            rejected; the SVG and the HTML output are sanitized; and each
+            Graphviz call has a timeout. See ``wv_safety.py``.
 
     Returns:
         Depending on the return_types parameter, may return:
@@ -108,11 +118,13 @@ def parse(
     if not output_formats and not return_types:
         raise Exception("No output formats or return types specified")
 
-    yaml_data, yaml_file, yaml_str = _get_yaml_data_and_path(inp)
+    yaml_data, yaml_file, yaml_str = _get_yaml_data_and_path(inp, untrusted)
     if not isinstance(yaml_data, dict):
         raise TypeError(
             f"Expected a dict as top-level YAML input, but got: {type(yaml_data)}"
         )
+    if untrusted:
+        _reject_tweaks(yaml_data)
     # When inp was a Path, derive source_path automatically so callers
     # don't have to pass it twice. Matches the docstring contract.
     if source_path is None and yaml_file is not None:
@@ -130,6 +142,14 @@ def parse(
         output_name = None
         output_file = None
 
+    # Work on a private copy: never mutate the caller's list (or a shared
+    # default) — a long-running server calls parse() many times.
+    if image_paths is None:
+        image_paths = []
+    elif isinstance(image_paths, (str, Path)):
+        image_paths = [image_paths]
+    else:
+        image_paths = list(image_paths)
     if yaml_file:
         # if reading from file, ensure that input file's parent directory is included in image_paths
         default_image_path = yaml_file.parent.resolve()
@@ -147,6 +167,7 @@ def parse(
         options=Options(**yaml_data.get("options", {})),
         tweak=Tweak(**yaml_data.get("tweak", {})),
         source_path=source_path,
+        untrusted=untrusted,
     )
     # others
     # store mapping of components to their respective template
@@ -172,7 +193,11 @@ def parse(
                         image = attribs.get("image")
                         if isinstance(image, dict):
                             image_path = image["src"]
-                            if image_path and not Path(image_path).is_absolute():
+                            if untrusted:
+                                image["src"] = check_untrusted_image(
+                                    image_path, image_paths
+                                )
+                            elif image_path and not Path(image_path).is_absolute():
                                 # resolve relative image path
                                 image["src"] = smart_file_resolve(
                                     image_path, image_paths
@@ -481,10 +506,32 @@ def parse(
         return tuple(returns) if len(returns) != 1 else returns[0]
 
 
+def _reject_tweaks(yaml_data: Dict) -> None:
+    """Raise ValueError if untrusted input uses ``tweak``. Tweaks inject
+    raw GraphViz source, which cannot be made safe."""
+    if yaml_data.get("tweak"):
+        raise ValueError("tweak is not allowed for untrusted input")
+    for section in ("connectors", "cables"):
+        for name, attribs in (yaml_data.get(section) or {}).items():
+            if isinstance(attribs, dict) and attribs.get("tweak"):
+                raise ValueError(
+                    f"{section}.{name}.tweak is not allowed for untrusted input"
+                )
+
+
 def _get_yaml_data_and_path(
     inp: Union[str, Path, Dict],
+    untrusted: bool = False,
 ) -> Tuple[Dict, Optional[Path], Optional[str]]:
     # determine whether inp is a file path, a YAML string, or a Dict
+    if untrusted and isinstance(inp, str):
+        # Never read a server-side file because the request text happens
+        # to name one.
+        if len(inp.encode("utf-8")) > UNTRUSTED_MAX_INPUT_BYTES:
+            raise ValueError(
+                f"Input is larger than the limit of {UNTRUSTED_MAX_INPUT_BYTES} bytes"
+            )
+        return yaml.safe_load(inp), None, inp
     if not isinstance(inp, Dict):  # received a str or a Path
         try:
             yaml_path = Path(inp).expanduser().resolve(strict=True)

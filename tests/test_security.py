@@ -235,3 +235,208 @@ def test_read_yaml_from_non_png_raises(tmp_path: Path):
     f.write_bytes(b"not a png")
     with pytest.raises(ValueError, match="Not a PNG"):
         read_yaml_from_png(f)
+
+
+# ===========================================================================
+# parse(..., untrusted=True)
+# ===========================================================================
+
+TRS = EXAMPLES / "resources" / "stereo-phone-plug-TRS.png"
+
+
+def test_l1_image_paths_not_mutated(tmp_path: Path, minimal_yaml: Path):
+    """L1. parse() must not mutate the caller's list or a shared default."""
+    defaults_before = repr(parse.__defaults__)
+    mine = [tmp_path]
+    parse(minimal_yaml, return_types="harness", image_paths=mine)
+    parse(minimal_yaml, return_types="harness")
+    assert mine == [tmp_path]
+    assert repr(parse.__defaults__) == defaults_before
+
+
+def test_h3_untrusted_str_is_never_a_path(tmp_path: Path):
+    """H3. A request body that names a server file must not read it."""
+    f = tmp_path / "server-only.yml"
+    f.write_text(f"connectors: {{X1: {{pincount: 1, notes: {SECRET}}}}}\n"
+                 "connections: [[X1]]\n")
+    with pytest.raises(TypeError) as exc:
+        parse(str(f), return_types="harness", untrusted=True)
+    assert SECRET not in str(exc.value)
+    # Trusted callers keep the old behavior.
+    assert parse(str(f), return_types="harness").connectors["X1"].notes == SECRET
+
+
+def test_untrusted_input_size_cap():
+    from wireviz.wv_safety import UNTRUSTED_MAX_INPUT_BYTES
+
+    big = "# " + "x" * UNTRUSTED_MAX_INPUT_BYTES + "\nconnectors: {}\n"
+    with pytest.raises(ValueError, match="larger than"):
+        parse(big, return_types="harness", untrusted=True)
+
+
+def _image_yaml(src) -> str:
+    return f"""
+connectors:
+  X1:
+    pincount: 1
+    image: {{src: '{src}'}}
+connections: [[X1]]
+"""
+
+
+def test_h2_untrusted_absolute_image_rejected():
+    with pytest.raises(ValueError, match="relative"):
+        parse(_image_yaml(TRS), return_types="svg", untrusted=True)
+
+
+def test_h2_untrusted_image_traversal_rejected(tmp_path: Path):
+    root = tmp_path / "uploads"
+    root.mkdir()
+    (tmp_path / "outside.png").write_bytes(TRS.read_bytes())
+    with pytest.raises(ValueError, match="not found"):
+        parse(_image_yaml("../outside.png"), return_types="svg",
+              image_paths=[root], untrusted=True)
+
+
+def test_h2_untrusted_image_inside_root_is_embedded(tmp_path: Path):
+    (tmp_path / "pic.png").write_bytes(TRS.read_bytes())
+    svg = parse(_image_yaml("pic.png"), return_types="svg",
+                image_paths=[tmp_path], untrusted=True)
+    assert "data:image/png;base64," in svg
+
+
+def test_untrusted_image_pixel_cap(tmp_path: Path):
+    (tmp_path / "huge.png").write_bytes(_png(20000, 20000))
+    with pytest.raises(ValueError, match="pixels"):
+        parse(_image_yaml("huge.png"), return_types="svg",
+              image_paths=[tmp_path], untrusted=True)
+
+
+@pytest.mark.parametrize("name", ["../../etc/passwd", "/tmp/private", "a.b"])
+def test_m3_untrusted_template_name_must_be_bare(name: str):
+    src = f"""
+metadata: {{template: {{name: '{name}'}}}}
+connectors: {{X1: {{pincount: 1}}}}
+connections: [[X1]]
+"""
+    harness = parse(src, return_types="harness", untrusted=True)
+    with pytest.raises(ValueError, match="bare name"):
+        harness._render(("html",))
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "tweak: {append: ['stylesheet=\"x\"']}\nconnectors: {X1: {pincount: 1}}\n",
+        "connectors: {X1: {pincount: 1, tweak: {append: ['a=b']}}}\n",
+    ],
+)
+def test_c2_untrusted_tweak_rejected(src: str):
+    with pytest.raises(ValueError, match="tweak"):
+        parse(src + "connections: [[X1]]\n", return_types="harness", untrusted=True)
+
+
+def test_c2_untrusted_svg_has_no_script():
+    """C2. Hypertext can make Graphviz emit javascript: links and event
+    handlers; the untrusted SVG must not contain them."""
+    src = """
+connectors:
+  X1:
+    pincount: 1
+    notes: '<table><tr><td href="javascript:alert(1)">click</td></tr></table>'
+  X2:
+    pincount: 1
+    notes: '<font face="x&quot; onload=&quot;alert(2)">n</font>'
+connections: [[X1], [X2]]
+"""
+    try:
+        svg = parse(src, return_types="svg", untrusted=True)
+    except ValueError as exc:  # markup that breaks XML is refused outright
+        assert "not well-formed" in str(exc)
+        return
+    lowered = svg.lower()
+    assert "javascript:" not in lowered
+    assert "onload" not in lowered and "alert(2)" not in lowered
+
+
+def test_c2_sanitize_svg_allowlist():
+    from wireviz.wv_safety import sanitize_svg
+
+    dirty = (
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        'xmlns:xlink="http://www.w3.org/1999/xlink">'
+        '<g onclick="x()"><script>alert(1)</script>'
+        '<a xlink:href="javascript:alert(1)"><text>t</text></a>'
+        '<a xlink:href="https://example.com"><text>ok</text></a>'
+        '<image xlink:href="/etc/passwd"/>'
+        '<image xlink:href="data:image/png;base64,AAAA"/>'
+        '<foreignObject><div/></foreignObject>'
+        '<animate attributeName="href" to="javascript:alert(1)"/>'
+        "</g></svg>"
+    )
+    clean = sanitize_svg(dirty)
+    assert "script" not in clean
+    assert "onclick" not in clean
+    assert "javascript" not in clean
+    assert "/etc/passwd" not in clean
+    assert "foreignObject" not in clean
+    assert "https://example.com" in clean
+    assert "data:image/png;base64,AAAA" in clean
+
+
+def test_h1_untrusted_html_is_sanitized():
+    src = """
+metadata:
+  title: '<script>alert("title")</script>Harness <b>A</b>'
+  description: '<a href="javascript:alert(1)">bad</a> <a href="https://ok.example">good</a>'
+connectors: {X1: {pincount: 1}}
+connections: [[X1]]
+additional_bom_items:
+  - {description: '<img src=x onerror=alert("bom")>Spacer', qty: 1}
+"""
+    harness = parse(src, return_types="harness", untrusted=True)
+    page = harness._render(("html",))["html"]
+    lowered = page.lower()
+    assert "<script>alert" not in lowered
+    assert "onerror" not in lowered
+    assert "javascript:" not in lowered
+    assert "<b>A</b>" in page
+    assert "Spacer" in page
+
+
+def test_h1_trusted_html_keeps_markup():
+    """Trusted output is unchanged: hypertext may hold HTML by design."""
+    src = """
+metadata: {title: 'T <i>x</i>'}
+connectors: {X1: {pincount: 1}}
+connections: [[X1]]
+"""
+    page = parse(src, return_types="harness")._render(("html",))["html"]
+    assert "T <i>x</i>" in page
+
+
+def test_sanitize_html_fragment():
+    from wireviz.wv_safety import sanitize_html_fragment as s
+
+    assert s("a < b & c") == "a &lt; b &amp; c"
+    assert s("x<br />y") == "x<br />y"
+    assert s("<b>open") == "<b>open</b>"
+    assert s("<style>p{}</style>t") == "t"
+    assert s('<font color="red" face="x">r</font>') == '<font color="red">r</font>'
+    assert s('<a href=" javascript:x">l</a>') == "<a>l</a>"
+
+
+def test_m1_untrusted_render_timeout(monkeypatch, minimal_yaml: Path):
+    import wireviz.Harness as H
+
+    monkeypatch.setattr(H, "UNTRUSTED_RENDER_TIMEOUT", 0.000001)
+    with pytest.raises(RuntimeError, match="did not finish"):
+        parse(minimal_yaml.read_text(), return_types="svg", untrusted=True)
+
+
+def test_untrusted_gallery_example_renders():
+    """Untrusted mode must still render ordinary harnesses."""
+    f = EXAMPLES / "demo01.yml"
+    svg = parse(f.read_text(), return_types="svg", image_paths=[f.parent],
+                untrusted=True)
+    assert svg.startswith("<?xml") and "<svg" in svg

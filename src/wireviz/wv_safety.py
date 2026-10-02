@@ -257,7 +257,14 @@ def sanitize_svg(svg: str) -> str:
     if local(root.tag) != "svg":
         raise ValueError("Rendered output is not an SVG document")
     clean(root)
+    # Register the prefixes again right before serializing: ElementTree's
+    # prefix table is global, and other libraries (WeasyPrint) reset it,
+    # which turned <svg> into <ns0:svg>.
+    ET.register_namespace("", _SVG_NS)
+    ET.register_namespace("xlink", _XLINK_NS)
     body = ET.tostring(root, encoding="unicode")
+    if "<ns0:" in body or "xmlns:ns0" in body:
+        raise ValueError("Sanitized SVG lost its namespace prefixes")
     return '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n' + body + "\n"
 
 

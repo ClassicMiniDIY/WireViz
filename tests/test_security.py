@@ -679,3 +679,26 @@ def test_review2_supplied_image_must_match_extension(tmp_path: Path, name, paylo
     src = f"connectors:\n  X1: {{pincount: 1, image: {name}}}\nconnections: [[X1]]\n"
     with pytest.raises(ValueError, match="Image x"):
         parse(src, return_types="harness", image_paths=[tmp_path], untrusted=True)
+
+
+def test_sanitize_svg_does_not_depend_on_global_namespace_table():
+    """WeasyPrint calls ET.register_namespace("", ""), which removed our
+    default SVG namespace: the next untrusted SVG came out as <ns0:svg>."""
+    import xml.etree.ElementTree as ET
+
+    from wireviz.wv_safety import sanitize_svg
+
+    ET.register_namespace("", "")  # what weasyprint/pdf/metadata.py does
+    try:
+        svg = parse(
+            "connectors: {X1: {pincount: 1}}\nconnections: [[X1]]\n",
+            return_types="svg",
+            untrusted=True,
+        )
+    finally:
+        ET.register_namespace("", "http://www.w3.org/2000/svg")
+    assert "ns0:" not in svg and "<svg " in svg
+    assert (
+        sanitize_svg('<svg xmlns="http://www.w3.org/2000/svg"><g/></svg>').count("ns0")
+        == 0
+    )

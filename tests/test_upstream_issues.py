@@ -836,3 +836,58 @@ def test_issue220_untrusted_refuses_include():
             return_types="harness",
             untrusted=True,
         )
+
+
+# ===========================================================================
+# Batch C3 — twisted pairs (#3, #353)
+# ===========================================================================
+
+TWISTED = """
+connectors:
+  X1: {pincount: 4}
+  X2: {pincount: 4}
+cables:
+  W1:
+    colors: [RD, BK, WH, BU]
+    twisted: [[RD, BK], {wires: [3, 4], rate: 20/m}]
+connections:
+  - - X1: [1-4]
+    - W1: [1-4]
+    - X2: [1-4]
+"""
+
+
+@pytest.mark.parametrize("untrusted", [False, True])
+def test_issue3_twisted_pairs_render(untrusted: bool):
+    h = parse(TWISTED, return_types="harness", untrusted=untrusted)
+    assert h.cables["W1"].twisted_groups == [([1, 2], None), ([3, 4], "20/m")]
+    source = h.graph.source
+    assert "Twisted pair</td>" in source and "Twisted pair: 20/m" in source
+    for i in range(1, 5):
+        assert f'port="w{i}"' in source
+    assert "<svg" in h.svg
+
+
+def test_issue3_twisted_group_rows_are_contiguous():
+    src = TWISTED.replace(
+        "twisted: [[RD, BK], {wires: [3, 4], rate: 20/m}]", "twisted: [[1, 3, 4]]"
+    )
+    h = parse(src, return_types="harness")
+    assert h.cables["W1"].wire_display_order()[0] == [1, 3, 4, 2]
+    assert "Twisted triad" in h.graph.source
+
+
+@pytest.mark.parametrize(
+    "twisted, message",
+    [
+        ("[[1]]", "2 or more wires"),
+        ("[[1, 2], [2, 3]]", "more than one twisted group"),
+        ("[[1, 9]]", "wire 9 not found"),
+        ("[[RD, GN]]", "wire GN not found"),
+        ("[{wires: [1, 2], twist: left}]", "only wires and rate"),
+    ],
+)
+def test_issue3_twisted_errors(twisted: str, message: str):
+    src = TWISTED.replace("[[RD, BK], {wires: [3, 4], rate: 20/m}]", twisted)
+    with pytest.raises((ValueError, TypeError), match=message):
+        parse(src, return_types="harness")

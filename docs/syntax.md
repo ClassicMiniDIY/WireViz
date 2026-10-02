@@ -3,6 +3,8 @@
 ## Main sections
 
 ```yaml
+include:  # optional list of files with shared definitions (see below)
+
 connectors:  # dictionary of all used connectors
   <str>   :    # unique connector designator/name
     ...          # connector attributes (see below)
@@ -164,6 +166,9 @@ tweak:  # optional tweaking of .gv output
   show_name: <bool>         # defaults to true
   show_wirecount: <bool>    # defaults to true
   show_wirenumbers: <bool>  # defaults to true for cables; false for bundles
+  twisted: <List>           # twisted groups, each a list of 2+ wires by number, color
+                            # or wire label, e.g. [[RD, BK], [3, 4]]; a group may be
+                            # {wires: [...], rate: 20/m}; shown framed in the cable box
   show_box: <bool>          # defaults to true; false hides the cable box and draws
                             # each wire straight from connector to connector
                             # (every wire then needs a connector at both ends)

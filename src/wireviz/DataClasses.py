@@ -491,6 +491,8 @@ class Cable:
     show_wirecount: bool = True
     # False: no cable box; each wire is drawn from connector to connector (#212)
     show_box: bool = True
+    # Twisted groups (upstream #3, #353): [[RD, BK], {wires: [3, 4], rate: 20/m}]
+    twisted: List = field(default_factory=list)
     show_wirenumbers: Optional[bool] = None
     ignore_in_bom: bool = False
     additional_components: List[AdditionalComponent] = field(default_factory=list)
@@ -583,6 +585,32 @@ class Cable:
                     '"s" may not be used as a wire label for a shielded cable.'
                 )
 
+        self.twisted_groups: List[Tuple[List[int], Optional[str]]] = []
+        if not isinstance(self.twisted, list):
+            raise TypeError(f"Cable {self.name}: twisted must be a list of wire groups")
+        twisted_seen = {}
+        for group in self.twisted:
+            rate = None
+            wires = group
+            if isinstance(group, dict):
+                if set(group) - {"wires", "rate"}:
+                    raise ValueError(
+                        f"Cable {self.name}: a twisted group takes only wires and rate"
+                    )
+                wires, rate = group.get("wires"), group.get("rate")
+            if not isinstance(wires, list) or len(wires) < 2:
+                raise ValueError(
+                    f"Cable {self.name}: each twisted group needs a list of 2 or more wires"
+                )
+            numbers = [self.wire_number(w) for w in wires]
+            for number in numbers:
+                if number in twisted_seen:
+                    raise ValueError(
+                        f"Cable {self.name}: wire {number} is in more than one twisted group"
+                    )
+                twisted_seen[number] = True
+            self.twisted_groups.append((numbers, None if rate is None else str(rate)))
+
         # if lists of part numbers are provided check this is a bundle and that it matches the wirecount.
         for idfield in [self.manufacturer, self.mpn, self.supplier, self.spn, self.pn]:
             if isinstance(idfield, list):
@@ -604,6 +632,42 @@ class Cable:
         for i, item in enumerate(self.additional_components):
             if isinstance(item, dict):
                 self.additional_components[i] = AdditionalComponent(**item)
+
+    def wire_number(self, wire) -> int:
+        """Return the 1-based number of a wire given by number, color or
+        wire label."""
+        if isinstance(wire, int) and not isinstance(wire, bool):
+            if 1 <= wire <= self.wirecount:
+                return wire
+        else:
+            for values in (self.colors, self.wirelabels):
+                if wire in values:
+                    if values.count(wire) > 1:
+                        raise ValueError(
+                            f"Cable {self.name}: {wire} is used for more than one wire"
+                        )
+                    return values.index(wire) + 1
+        raise ValueError(f"Cable {self.name}: wire {wire} not found")
+
+    def wire_display_order(self) -> Tuple[List[int], Dict[int, int]]:
+        """Return the order the wires are listed in the cable box, and
+        {wire: twisted group index}. The wires of a twisted group are
+        listed together, at the place of the group's lowest wire."""
+        group_of = {
+            wire: index
+            for index, (numbers, _) in enumerate(self.twisted_groups)
+            for wire in numbers
+        }
+        order, done = [], set()
+        for wire in range(1, self.wirecount + 1):
+            if wire in done:
+                continue
+            members = (
+                self.twisted_groups[group_of[wire]][0] if wire in group_of else [wire]
+            )
+            order += members
+            done.update(members)
+        return order, group_of
 
     # The *_pin arguments accept a tuple, but it seems not in use with the current code.
     def connect(

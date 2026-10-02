@@ -30,6 +30,7 @@ Fixes for open issues in the original [wireviz/WireViz](https://github.com/wirev
 
 ### New features
 
+- Cable `twisted: [[RD, BK], {wires: [3, 4], rate: 20/m}]` shows twisted pairs, triads and groups as framed groups in the cable box ([#3](https://github.com/wireviz/WireViz/issues/3), [#353](https://github.com/wireviz/WireViz/issues/353)).
 - `include:` merges shared connector/cable libraries from other files; `-I/--include-path` adds search directories ([#220](https://github.com/wireviz/WireViz/issues/220)). Not allowed in untrusted mode.
 - A cable with no `wirecount` or `colors` takes its wire count from the wire numbers used in the connections ([#508](https://github.com/wireviz/WireViz/issues/508)).
 

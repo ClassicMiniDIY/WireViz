@@ -653,9 +653,26 @@ class Harness:
             wirehtml.append('<table border="0" cellspacing="0" cellborder="0">')
             wirehtml.append("   <tr><td>&nbsp;</td></tr>")
 
-            for i, (connection_color, wirelabel) in enumerate(
-                zip_longest(cable.colors, cable.wirelabels), 1
-            ):
+            wires = list(zip_longest(cable.colors, cable.wirelabels))
+            order, group_of = cable.wire_display_order()
+            for i in order:
+                connection_color, wirelabel = wires[i - 1]
+                group = group_of.get(i)
+                if group is not None and i == cable.twisted_groups[group][0][0]:
+                    # Twisted group (upstream #3, #353): a thin solid frame
+                    # with a caption. Solid, because dashed means a shield.
+                    numbers, rate = cable.twisted_groups[group]
+                    kind = {2: "pair", 3: "triad", 4: "quad"}.get(len(numbers), "group")
+                    caption = f"Twisted {kind}" + (f": {rate}" if rate else "")
+                    wirehtml.append(
+                        '   <tr><td colspan="3" border="1" cellpadding="2">'
+                    )
+                    wirehtml.append(
+                        '    <table border="0" cellspacing="0" cellborder="0">'
+                    )
+                    wirehtml.append(
+                        f'     <tr><td colspan="3">{html_text(caption)}</td></tr>'
+                    )
                 wirehtml.append("   <tr>")
                 wirehtml.append(f"    <td><!-- {i}_in --></td>")
                 wirehtml.append(f"    <td>")
@@ -728,6 +745,10 @@ class Harness:
                         wirehtml.append("    </tr></table>")
                         wirehtml.append("   </td></tr>")
                         # fmt: on
+
+                if group is not None and i == cable.twisted_groups[group][0][-1]:
+                    wirehtml.append("    </table>")
+                    wirehtml.append("   </td></tr>")
 
             if cable.shield:
                 wirehtml.append("   <tr><td>&nbsp;</td></tr>")  # spacer

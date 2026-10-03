@@ -142,6 +142,16 @@ Wildcards in the file path are also supported to process multiple files at once,
 $ wireviz ~/path/to/files/*.yml
 ```
 
+### Print-ready PDF sheet
+
+`wireviz -f D harness.yml` writes `harness.sheet.pdf`: the HTML page (diagram, BOM and, with the `din-6771` template, frame and title block) as a one-page PDF at the template's sheet size (`metadata.template.sheetsize`: A4, A3 or A2). It needs Python 3.10 or later and WeasyPrint:
+
+```
+$ pip install "wireviz[pdf]"
+```
+
+WeasyPrint also needs the Pango library (`apt install libpango-1.0-0 libpangoft2-1.0-0` on Debian/Ubuntu, `brew install pango` on macOS; if Python then cannot find it on macOS, set `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`). `-f P` still writes the diagram alone as PDF, without this dependency.
+
 To see how to specify the output formats, as well as additional options, run:
 
 ```

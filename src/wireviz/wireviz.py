@@ -14,6 +14,7 @@ if __name__ == "__main__":
 
 from wireviz.DataClasses import Metadata, Options, Tweak
 from wireviz.Harness import Harness
+from wireviz.wv_errors import WireVizError
 from wireviz.wv_helper import (
     expand,
     file_read_text,
@@ -23,6 +24,7 @@ from wireviz.wv_helper import (
     yaml_load,
 )
 from wireviz.wv_images import is_data_uri, materialize_data_uri, materialize_webp
+from wireviz.wv_include import resolve_includes
 from wireviz.wv_safety import UNTRUSTED_MAX_INPUT_BYTES, check_untrusted_image
 
 from . import APP_NAME
@@ -40,6 +42,7 @@ def parse(
     embed_yaml: bool = True,
     untrusted: bool = False,
     disable_keys: Union[None, str, Tuple[str, ...], List[str]] = None,
+    include_paths: Union[None, str, Path, List] = None,
 ) -> Any:
     """
     This function takes an input, parses it as a WireViz Harness file,
@@ -61,6 +64,8 @@ def parse(
         * "html": the diagram and (depending on the template) the BOM, as a HTML file
         * "png":  the diagram, as a PNG raster image
         * "pdf":  the diagram, as a PDF document (no BOM — see "html" for that)
+        * "sheet": the HTML page (frame, diagram, BOM, title block) as a
+          print-ready PDF; needs ``pip install "wireviz[pdf]"``
         * "svg":  the diagram, as a SVG vector image
         * "tsv":  the BOM, as a tab-separated text file
 
@@ -113,6 +118,10 @@ def parse(
             harness is built, e.g. ``"image"``; ``"X1.image"`` drops it
             from one component only (upstream #410). Lets one YAML render
             with and without images, notes, etc.
+        include_paths (Path | str | List, optional):
+            Directories searched for files named in a top-level
+            ``include:`` list, after the including file's directory
+            (upstream #220). See ``wv_include.py``.
 
     Returns:
         Depending on the return_types parameter, may return:
@@ -133,6 +142,7 @@ def parse(
     return_types = tuple(t.lower() for t in return_types or ())
 
     yaml_data, yaml_file, yaml_str = _get_yaml_data_and_path(inp, untrusted)
+    include_snapshot = None
     if yaml_data is None:
         raise ValueError("The input is empty: it holds no YAML content")
     if not isinstance(yaml_data, dict):
@@ -141,6 +151,21 @@ def parse(
         )
     if untrusted:
         _reject_tweaks(yaml_data)
+        if "include" in yaml_data:
+            raise ValueError("include is not allowed for untrusted input")
+    if "include" in yaml_data:
+        base = yaml_file or (
+            Path(source_path)
+            if source_path is not None and str(source_path) != "-"
+            else None
+        )
+        if isinstance(include_paths, (str, Path)):
+            include_paths = [include_paths]
+        resolve_includes(
+            yaml_data, base.parent if base else Path.cwd(), list(include_paths or [])
+        )
+        # A PNG must be self-contained: it embeds the merged YAML.
+        include_snapshot = copy.deepcopy(yaml_data)
     if disable_keys:
         _disable_keys(yaml_data, disable_keys)
     # When inp was a Path, derive source_path automatically so callers
@@ -268,6 +293,9 @@ def parse(
                 yaml_data[sec] = []
 
     connection_sets = yaml_data["connections"]
+    implied_wirecounts, cable_instances = _implied_wirecounts(
+        connection_sets, template_cables, harness.options.template_separator
+    )
 
     # go through connection sets, generate and connect components ==============
 
@@ -318,162 +346,230 @@ def parse(
         nonlocal expected_type
         expected_type = alternating_types[1 - alternating_types.index(expected_type)]
 
-    for connection_set in connection_sets:
-        # The steps below rewrite the set in place. A YAML alias (*name)
-        # makes several sets share one list, so work on a private copy.
-        connection_set = copy.deepcopy(connection_set)
-        # figure out number of parallel connections within this set
-        connectioncount = []
-        for entry in connection_set:
-            if isinstance(entry, list):
-                connectioncount.append(len(entry))
-            elif isinstance(entry, dict):
-                connectioncount.append(len(expand(list(entry.values())[0])))
-                # e.g.: - X1: [1-4,6] yields 5
-            else:
-                pass  # strings do not reveal connectioncount
-        if not any(connectioncount):
-            # no item in the list revealed connection count;
-            # assume connection count is 1
-            connectioncount = [1]
-            # Example: The following is a valid connection set,
-            #          even though no item reveals the connection count;
-            #          the count is not needed because only a component-level mate happens.
-            # -
-            #   - CONNECTOR
-            #   - ==>
-            #   - CONNECTOR
-
-        # check that all entries are the same length
-        if len(set(connectioncount)) > 1:
-            raise Exception(
-                "All items in connection set must reference the same number of connections"
-            )
-        # all entries are the same length, connection count is set
-        connectioncount = connectioncount[0]
-
-        # expand string entries to list entries of correct length
-        for index, entry in enumerate(connection_set):
-            if isinstance(entry, str):
-                connection_set[index] = [entry] * connectioncount
-
-        # resolve all designators
-        for index, entry in enumerate(connection_set):
-            if isinstance(entry, list):
-                for subindex, item in enumerate(entry):
-                    template, designator = resolve_designator(
-                        item, template_separator_char
+    for set_number, connection_set in enumerate(connection_sets, start=1):
+        set_label = _describe_set(connection_set)  # before the set is rewritten
+        bare_cables = set()  # cables named alone in this set (#508)
+        try:
+            if not isinstance(connection_set, list):
+                raise ValueError("a connection set must be a list")
+            for entry in connection_set:
+                if isinstance(entry, dict) and len(entry) != 1:
+                    raise ValueError(
+                        "each mapping in a connection set needs exactly one "
+                        f"designator, not {len(entry)}"
                     )
-                    connection_set[index][subindex] = designator
-            elif isinstance(entry, dict):
-                key = list(entry.keys())[0]
-                template, designator = resolve_designator(key, template_separator_char)
-                value = entry[key]
-                connection_set[index] = {designator: value}
-            else:
-                pass  # string entries have been expanded in previous step
-
-        # expand all pin lists
-        for index, entry in enumerate(connection_set):
-            if isinstance(entry, list):
-                connection_set[index] = [{designator: 1} for designator in entry]
-            elif isinstance(entry, dict):
-                designator = list(entry.keys())[0]
-                pinlist = expand(entry[designator])
-                connection_set[index] = [{designator: pin} for pin in pinlist]
-            else:
-                pass  # string entries have been expanded in previous step
-
-        # Populate wiring harness ==============================================
-
-        expected_type = None  # reset check for alternating types
-        # at the beginning of every connection set
-        # since each set may begin with either type
-
-        # generate components
-        for entry in connection_set:
-            for item in entry:
-                designator = list(item.keys())[0]
-                template = designators_and_templates[designator]
-
-                if designator in harness.connectors:  # existing connector instance
-                    check_type(designator, template, "connector")
-                elif template in template_connectors.keys():
-                    # generate new connector instance from template
-                    check_type(designator, template, "connector")
-                    harness.add_connector(
-                        name=designator, **template_connectors[template]
-                    )
-
-                elif designator in harness.cables:  # existing cable instance
-                    check_type(designator, template, "cable/arrow")
-                elif template in template_cables.keys():
-                    # generate new cable instance from template
-                    check_type(designator, template, "cable/arrow")
-                    harness.add_cable(name=designator, **template_cables[template])
-
-                elif is_arrow(designator):
-                    check_type(designator, template, "cable/arrow")
-                    # arrows do not need to be generated here
+                if isinstance(entry, list) and not entry:
+                    raise ValueError("a connection set entry is an empty list")
+            # The steps below rewrite the set in place. A YAML alias (*name)
+            # makes several sets share one list, so work on a private copy.
+            connection_set = copy.deepcopy(connection_set)
+            # figure out number of parallel connections within this set
+            connectioncount = []
+            for entry in connection_set:
+                if isinstance(entry, list):
+                    connectioncount.append(len(entry))
+                elif isinstance(entry, dict):
+                    connectioncount.append(len(expand(list(entry.values())[0])))
+                    # e.g.: - X1: [1-4,6] yields 5
                 else:
-                    raise Exception(
-                        f"{template} is an unknown template/designator/arrow."
+                    pass  # strings do not reveal connectioncount
+            if not any(connectioncount):
+                # no item in the list revealed connection count;
+                # assume connection count is 1
+                connectioncount = [1]
+                # Example: The following is a valid connection set,
+                #          even though no item reveals the connection count;
+                #          the count is not needed because only a component-level mate happens.
+                # -
+                #   - CONNECTOR
+                #   - ==>
+                #   - CONNECTOR
+
+            # check that all entries are the same length
+            if len(set(connectioncount)) > 1:
+                raise Exception(
+                    "All items in connection set must reference the same number of connections"
+                )
+            # all entries are the same length, connection count is set
+            connectioncount = connectioncount[0]
+
+            # expand string entries to list entries of correct length
+            for index, entry in enumerate(connection_set):
+                if isinstance(entry, str):
+                    template_name, sep, designator_name = entry.partition(
+                        template_separator_char
                     )
-
-            alternate_type()  # entries in connection set must alternate between connectors and cables/arrows
-
-        # transpose connection set list
-        # before: one item per component, one subitem per connection in set
-        # after:  one item per connection in set, one subitem per component
-        connection_set = list(map(list, zip(*connection_set)))
-
-        # connect components
-        for index_entry, entry in enumerate(connection_set):
-            for index_item, item in enumerate(entry):
-                designator = list(item.keys())[0]
-
-                if designator in harness.cables:
-                    if index_item == 0:
-                        # list started with a cable, no connector to join on left side
-                        from_name, from_pin = (None, None)
+                    if (
+                        template_name in template_cables
+                        and (not sep or designator_name)
+                    ) or (not sep and entry in cable_instances):
+                        bare_cables.add(designator_name or entry)
+                        # a bare named cable uses wires 1..n (upstream #508)
+                        connection_set[index] = {
+                            entry: list(range(1, connectioncount + 1))
+                        }
                     else:
+                        connection_set[index] = [entry] * connectioncount
+
+            # resolve all designators
+            for index, entry in enumerate(connection_set):
+                if isinstance(entry, list):
+                    for subindex, item in enumerate(entry):
+                        template, designator = resolve_designator(
+                            item, template_separator_char
+                        )
+                        connection_set[index][subindex] = designator
+                elif isinstance(entry, dict):
+                    key = list(entry.keys())[0]
+                    template, designator = resolve_designator(
+                        key, template_separator_char
+                    )
+                    value = entry[key]
+                    connection_set[index] = {designator: value}
+                else:
+                    pass  # string entries have been expanded in previous step
+
+            # expand all pin lists
+            for index, entry in enumerate(connection_set):
+                if isinstance(entry, list):
+                    connection_set[index] = [{designator: 1} for designator in entry]
+                elif isinstance(entry, dict):
+                    designator = list(entry.keys())[0]
+                    pinlist = expand(entry[designator])
+                    connection_set[index] = [{designator: pin} for pin in pinlist]
+                else:
+                    pass  # string entries have been expanded in previous step
+
+            # Populate wiring harness ==============================================
+
+            expected_type = None  # reset check for alternating types
+            # at the beginning of every connection set
+            # since each set may begin with either type
+
+            # generate components
+            for entry in connection_set:
+                for item in entry:
+                    designator = list(item.keys())[0]
+                    template = designators_and_templates[designator]
+
+                    if designator in harness.connectors:  # existing connector instance
+                        check_type(designator, template, "connector")
+                    elif template in template_connectors.keys():
+                        # generate new connector instance from template
+                        check_type(designator, template, "connector")
+                        harness.add_connector(
+                            name=designator, **template_connectors[template]
+                        )
+
+                    elif designator in harness.cables:  # existing cable instance
+                        check_type(designator, template, "cable/arrow")
+                    elif template in template_cables.keys():
+                        # generate new cable instance from template
+                        check_type(designator, template, "cable/arrow")
+                        attribs = template_cables[template]
+                        if not attribs.get("wirecount") and not attribs.get("colors"):
+                            # infer the wire count from the connections (#508)
+                            count = implied_wirecounts.get(designator) or max(
+                                [
+                                    i[designator]
+                                    for e in connection_set
+                                    for i in e
+                                    if designator in i
+                                    and isinstance(i[designator], int)
+                                ],
+                                default=0,
+                            )
+                            if count:
+                                attribs = {**attribs, "wirecount": count}
+                        harness.add_cable(name=designator, **attribs)
+
+                    elif is_arrow(designator):
+                        check_type(designator, template, "cable/arrow")
+                        # arrows do not need to be generated here
+                    else:
+                        raise Exception(
+                            f"{template} is an unknown template/designator/arrow."
+                        )
+
+                alternate_type()  # entries in connection set must alternate between connectors and cables/arrows
+
+            # transpose connection set list
+            # before: one item per component, one subitem per connection in set
+            # after:  one item per connection in set, one subitem per component
+            connection_set = list(map(list, zip(*connection_set)))
+
+            # connect components
+            for index_entry, entry in enumerate(connection_set):
+                for index_item, item in enumerate(entry):
+                    designator = list(item.keys())[0]
+
+                    if designator in harness.cables:
+                        if index_item == 0:
+                            # list started with a cable, no connector to join on left side
+                            from_name, from_pin = (None, None)
+                        else:
+                            from_name, from_pin = get_single_key_and_value(
+                                entry[index_item - 1]
+                            )
+                        via_name, via_pin = (designator, item[designator])
+                        if index_item == len(entry) - 1:
+                            # list ends with a cable, no connector to join on right side
+                            to_name, to_pin = (None, None)
+                        else:
+                            to_name, to_pin = get_single_key_and_value(
+                                entry[index_item + 1]
+                            )
+                        harness.connect(
+                            from_name, from_pin, via_name, via_pin, to_name, to_pin
+                        )
+
+                    elif is_arrow(designator):
+                        if index_item == 0:  # list starts with an arrow
+                            raise Exception(
+                                "An arrow cannot be at the start of a connection set"
+                            )
+                        elif index_item == len(entry) - 1:  # list ends with an arrow
+                            raise Exception(
+                                "An arrow cannot be at the end of a connection set"
+                            )
+
                         from_name, from_pin = get_single_key_and_value(
                             entry[index_item - 1]
                         )
-                    via_name, via_pin = (designator, item[designator])
-                    if index_item == len(entry) - 1:
-                        # list ends with a cable, no connector to join on right side
-                        to_name, to_pin = (None, None)
-                    else:
+                        via_name, via_pin = (designator, None)
                         to_name, to_pin = get_single_key_and_value(
                             entry[index_item + 1]
                         )
-                    harness.connect(
-                        from_name, from_pin, via_name, via_pin, to_name, to_pin
-                    )
-
-                elif is_arrow(designator):
-                    if index_item == 0:  # list starts with an arrow
-                        raise Exception(
-                            "An arrow cannot be at the start of a connection set"
-                        )
-                    elif index_item == len(entry) - 1:  # list ends with an arrow
-                        raise Exception(
-                            "An arrow cannot be at the end of a connection set"
-                        )
-
-                    from_name, from_pin = get_single_key_and_value(
-                        entry[index_item - 1]
-                    )
-                    via_name, via_pin = (designator, None)
-                    to_name, to_pin = get_single_key_and_value(entry[index_item + 1])
-                    if "-" in designator:  # mate pin by pin
-                        harness.add_mate_pin(
-                            from_name, from_pin, to_name, to_pin, designator
-                        )
-                    elif "=" in designator and index_entry == 0:
-                        # mate two connectors as a whole
-                        harness.add_mate_component(from_name, to_name, designator)
+                        if "-" in designator:  # mate pin by pin
+                            harness.add_mate_pin(
+                                from_name, from_pin, to_name, to_pin, designator
+                            )
+                        elif "=" in designator and index_entry == 0:
+                            # mate two connectors as a whole
+                            harness.add_mate_component(from_name, to_name, designator)
+        except Exception as exc:
+            # Name the connection set (upstream #505, #207). Input errors
+            # (ValueError, TypeError, plain Exception) get the context and
+            # keep their class (plain Exception becomes WireVizError);
+            # anything else is a bug and passes through unchanged.
+            if (
+                not isinstance(exc, (ValueError, TypeError))
+                and type(exc) is not Exception
+            ):
+                raise
+            message = f"connection set {set_number} ({set_label}): {exc}"
+            bare = [c for c in bare_cables if str(exc).startswith(f"{c}:")]
+            if "out of range" in str(exc) and bare:
+                message += (
+                    " (a cable named alone uses wires 1..n since #508; "
+                    f"list the wires, e.g. {bare[0]}: [1, 1, 1], for the old meaning)"
+                )
+            cls = WireVizError if type(exc) is Exception else type(exc)
+            try:
+                error = cls(message)
+            except Exception:  # an exception class with a special signature
+                error = WireVizError(message)
+            raise error from exc
 
     # Auto-instantiate any declared connector that has loops but was not
     # referenced in a connection set. A connector whose only purpose is to
@@ -522,7 +618,13 @@ def parse(
     # Only build the YAML text for the PNG chunk when a PNG is produced.
     wants_png = "png" in (output_formats or ()) or "png" in return_types
     yaml_source_for_png = (
-        _yaml_source(inp, yaml_str) if embed_yaml and wants_png else None
+        (
+            _yaml_source(include_snapshot, None)
+            if include_snapshot is not None
+            else _yaml_source(inp, yaml_str)
+        )
+        if embed_yaml and wants_png
+        else None
     )
     if output_formats:
         if write_to_stdout:
@@ -562,6 +664,96 @@ def parse(
                 returns.append(harness)
 
         return tuple(returns) if len(returns) != 1 else returns[0]
+
+
+def _describe_set(connection_set) -> str:
+    """Return "X1 → W1 → X2" for the items of a connection set."""
+    names = []
+    for entry in connection_set:
+        if isinstance(entry, dict) and entry:
+            names.append(str(next(iter(entry))))
+        elif isinstance(entry, list) and entry:
+            first = entry[0]
+            names.append(str(next(iter(first)) if isinstance(first, dict) else first))
+        else:
+            names.append(str(entry))
+    return " → ".join(names)
+
+
+def _implied_wirecounts(connection_sets, template_cables: Dict, separator: str):
+    """Return ({cable designator: wire count}, {instance designator:
+    template}) for cables that have neither wirecount nor colors (upstream
+    #508): the count is the highest wire number used for the designator,
+    or n for a cable named alone in a set of n connections. Autogenerated
+    instances (``W.``) are counted where they are created. Malformed
+    entries are skipped here; the main loop reports them with context."""
+    sets = [s for s in connection_sets if isinstance(s, list)]
+
+    # every named cable instance (T.D) -> its template, over all sets
+    instances = {}
+    for connection_set in sets:
+        for entry in connection_set:
+            names = (
+                [entry]
+                if isinstance(entry, str)
+                else (
+                    list(entry)
+                    if isinstance(entry, dict)
+                    else (
+                        [e for e in entry if isinstance(e, str)]
+                        if isinstance(entry, list)
+                        else []
+                    )
+                )
+            )
+            for name in names:
+                if isinstance(name, str) and separator in name:
+                    template, _, designator = name.partition(separator)
+                    if designator and template in template_cables:
+                        instances[designator] = template
+
+    def designator_of(name):
+        if not isinstance(name, str):
+            return None, None
+        if separator in name:
+            template, _, designator = name.partition(separator)
+            return (template, designator) if designator else (None, None)
+        if name in template_cables:
+            return name, name
+        return instances.get(name), name
+
+    implied = {}
+    for connection_set in sets:
+        try:
+            counts = [
+                len(e) if isinstance(e, list) else len(expand(list(e.values())[0]))
+                for e in connection_set
+                if isinstance(e, (list, dict)) and e
+            ]
+        except (ValueError, TypeError):
+            continue
+        n = max(counts) if counts else 1
+        for entry in connection_set:
+            if isinstance(entry, str):
+                template, designator = designator_of(entry)
+                wires = list(range(1, n + 1))
+            elif isinstance(entry, dict) and len(entry) == 1:
+                key, value = next(iter(entry.items()))
+                template, designator = designator_of(key)
+                try:
+                    wires = [w for w in expand(value) if isinstance(w, int)]
+                except (ValueError, TypeError):
+                    continue
+            else:
+                continue
+            attribs = template_cables.get(template)
+            if designator is None or not isinstance(attribs, dict):
+                continue
+            if attribs.get("wirecount") or attribs.get("colors"):
+                continue
+            if wires:
+                implied[designator] = max(implied.get(designator, 0), max(wires))
+    return implied, instances
 
 
 def _disable_keys(yaml_data: Dict, keys) -> None:

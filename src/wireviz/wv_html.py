@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import re
+from datetime import date
 from html import escape
 from pathlib import Path
 from typing import Callable, Dict, List, Union
@@ -15,6 +16,7 @@ from wireviz.wv_helper import (
     smart_file_resolve,
 )
 from wireviz.wv_safety import check_template_name, sanitize_html_fragment
+
 
 def _latest_revision(metadata: Metadata) -> str:
     """Return the key of the most recently added entry in
@@ -139,8 +141,9 @@ def generate_html_output(
         "<!-- %bom_reversed% -->": bom_html_reversed,
         "<!-- %sheet_current% -->": "1",  # TODO: handle multi-page documents
         "<!-- %sheet_total% -->": "1",  # TODO: handle multi-page documents
+        # A4 when not set, so the DIN 6771 frame always has a size
         "<!-- %template_sheetsize% -->": clean(
-            (metadata.get("template") or {}).get("sheetsize", "")
+            (metadata.get("template") or {}).get("sheetsize") or "A4"
         ),
         "<!-- %revision% -->": clean(_latest_revision(metadata)),
     }
@@ -167,6 +170,8 @@ def generate_html_output(
             # attribute or style contexts in the templates.
             if untrusted and f"<!-- %{item}% -->" in replacements:
                 continue
+            if isinstance(contents, date):  # an unquoted YAML date
+                contents = contents.isoformat()
             if isinstance(contents, (str, int, float)):
                 replacements[f"<!-- %{item}% -->"] = clean(
                     html_line_breaks(str(contents))
@@ -183,6 +188,9 @@ def generate_html_output(
                             )
                     elif isinstance(entry, (str, int, float)):
                         pass  # TODO?: replacements[f"<!-- %{item}_{category}% -->"] = html_line_breaks(str(entry))
+
+    # metadata.date (if it gave a value) wins over today's date
+    replacements.setdefault("<!-- %date% -->", date.today().isoformat())
 
     # perform replacements
     # regex replacement adapted from:

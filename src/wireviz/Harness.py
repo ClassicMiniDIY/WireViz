@@ -39,6 +39,7 @@ from wireviz.wv_bom import (
     pn_info_string,
 )
 from wireviz.wv_colors import get_color_hex, translate_color
+from wireviz.wv_errors import WireVizRenderError
 from wireviz.wv_gv_html import (
     html_bgcolor,
     html_bgcolor_attr,
@@ -68,6 +69,7 @@ from wireviz.wv_safety import (
     check_html_label,
     sanitize_svg,
 )
+from wireviz.wv_sheet import html_to_pdf
 
 OLD_CONNECTOR_ATTR = {
     "pinout": "was renamed to 'pinlabels' in v0.2",
@@ -211,6 +213,42 @@ def _dot_attr_value(value: str) -> str:
     if (len(value) - len(value.rstrip("\\"))) % 2:
         value += "\\"
     return '"' + re.sub(r'(?<!\\)"', r'\\"', value) + '"'
+
+
+# Upper bound for pins x shorts summed over all connectors: each short adds
+# a table cell to every pin row, so YAML aliases could otherwise multiply a
+# few hundred bytes into hundreds of MB of DOT source.
+MAX_SHORT_CELLS = 100_000
+
+
+def short_spans(connector: Connector) -> List[tuple]:
+    """Return (member rows, first row, last row, hex color) for each short
+    of ``connector`` (upstream #350); computed once per connector."""
+    spans = []
+    for pins, color in connector.short_groups:
+        rows = {connector.pins.index(pin) for pin in pins}
+        hex_color = get_color_hex(color)[0] if color else "#000000"
+        spans.append((rows, min(rows), max(rows), hex_color))
+    return spans
+
+
+def short_cells(spans: List[tuple], pinindex: int) -> List[str]:
+    """Return one table cell per short for the pin row at ``pinindex``: a
+    solid bar from the first to the last shorted pin, with a dot at each
+    shorted pin."""
+    cells = []
+    for rows, first, last, hex_color in spans:
+        if pinindex in rows:
+            r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
+            dot = "#000000" if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else "#ffffff"
+            cells.append(
+                f'    <td border="0" bgcolor="{hex_color}"><font color="{dot}">&#9679;</font></td>'
+            )
+        elif first < pinindex < last:
+            cells.append(f'    <td border="0" bgcolor="{hex_color}"></td>')
+        else:
+            cells.append('    <td border="0"></td>')
+    return cells
 
 
 def _edge(dot: Graph, tail: tuple, head: tuple, **attrs) -> None:
@@ -475,7 +513,21 @@ class Harness:
             for colorstr in cable.colors
         )
 
+        short_cells_total = sum(
+            len(c.pins) * len(c.short_groups) for c in self.connectors.values()
+        )
+        if short_cells_total > MAX_SHORT_CELLS:
+            # each short is a column over every pin row (#350)
+            raise ValueError(
+                f"shorts: pins x shorts over all connectors is {short_cells_total}; "
+                f"the limit is {MAX_SHORT_CELLS}"
+            )
         for connector in self.connectors.values():
+            if connector.style == "simple" and connector.short_groups:
+                sys.stderr.write(
+                    f"Warning: Connector {connector.name}: shorts are not shown "
+                    "for style: simple\n"
+                )
             # If no wires connected (except maybe loop wires)?
             if not (connector.ports_left or connector.ports_right):
                 connector.ports_left = True  # Use left side pins.
@@ -509,6 +561,7 @@ class Harness:
 
             if connector.style != "simple":
                 pinhtml = []
+                spans = short_spans(connector)
                 pinhtml.append(
                     '<table border="0" cellspacing="0" cellpadding="3" cellborder="1">'
                 )
@@ -529,6 +582,9 @@ class Harness:
                         pinhtml.append(
                             f'    <td port="p{pinindex+1}l">{html_text(pinname)}</td>'
                         )
+                    # Shorts sit next to the left ports (or first): every row
+                    # has those cells, so the short columns line up.
+                    pinhtml.extend(short_cells(spans, pinindex))
                     if pinlabel:
                         pinhtml.append(f"    <td>{html_text(pinlabel)}</td>")
                     if connector.pincolors:
@@ -653,9 +709,26 @@ class Harness:
             wirehtml.append('<table border="0" cellspacing="0" cellborder="0">')
             wirehtml.append("   <tr><td>&nbsp;</td></tr>")
 
-            for i, (connection_color, wirelabel) in enumerate(
-                zip_longest(cable.colors, cable.wirelabels), 1
-            ):
+            wires = list(zip_longest(cable.colors, cable.wirelabels))
+            order, group_of = cable.wire_display_order()
+            for i in order:
+                connection_color, wirelabel = wires[i - 1]
+                group = group_of.get(i)
+                if group is not None and i == cable.twisted_groups[group][0][0]:
+                    # Twisted group (upstream #3, #353): a thin solid frame
+                    # with a caption. Solid, because dashed means a shield.
+                    numbers, rate = cable.twisted_groups[group]
+                    kind = {2: "pair", 3: "triad", 4: "quad"}.get(len(numbers), "group")
+                    caption = f"Twisted {kind}" + (f": {rate}" if rate else "")
+                    wirehtml.append(
+                        '   <tr><td colspan="3" border="1" cellpadding="2">'
+                    )
+                    wirehtml.append(
+                        '    <table border="0" cellspacing="0" cellborder="0">'
+                    )
+                    wirehtml.append(
+                        f'     <tr><td colspan="3">{html_text(caption)}</td></tr>'
+                    )
                 wirehtml.append("   <tr>")
                 wirehtml.append(f"    <td><!-- {i}_in --></td>")
                 wirehtml.append(f"    <td>")
@@ -728,6 +801,10 @@ class Harness:
                         wirehtml.append("    </tr></table>")
                         wirehtml.append("   </td></tr>")
                         # fmt: on
+
+                if group is not None and i == cable.twisted_groups[group][0][-1]:
+                    wirehtml.append("    </table>")
+                    wirehtml.append("   </td></tr>")
 
             if cable.shield:
                 wirehtml.append("   <tr><td>&nbsp;</td></tr>")  # spacer
@@ -864,6 +941,11 @@ class Harness:
             html = "\n".join(html)
             if self.untrusted and cable.show_box:
                 check_html_label(html, f"Cable {cable.name}")
+            if not cable.show_box and cable.twisted_groups:
+                sys.stderr.write(
+                    f"Warning: Cable {cable.name}: twisted groups are not shown "
+                    "with show_box: false\n"
+                )
             if cable.show_box:
                 dot.node(
                     nohtml(cable.name),
@@ -1014,11 +1096,11 @@ class Harness:
                 timeout=UNTRUSTED_RENDER_TIMEOUT,
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
+            raise WireVizRenderError(
                 f"Graphviz did not finish within {UNTRUSTED_RENDER_TIMEOUT} s"
             ) from exc
         if result.returncode != 0:
-            raise RuntimeError(
+            raise WireVizRenderError(
                 "Graphviz failed: " + result.stderr.decode("utf-8", "replace").strip()
             )
         return result.stdout
@@ -1128,7 +1210,7 @@ class Harness:
                 out.flush()
             return
 
-        suffix_map = {"tsv": "bom.tsv", "csv": "bom.csv"}
+        suffix_map = {"tsv": "bom.tsv", "csv": "bom.csv", "sheet": "sheet.pdf"}
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
         for f, content in outputs.items():
             ext = suffix_map.get(f, f)
@@ -1178,7 +1260,7 @@ class Harness:
         outputs: Dict[str, Union[str, bytes]] = {}
 
         svg_str: Optional[str] = None
-        if "svg" in fmt or "html" in fmt:
+        if "svg" in fmt or "html" in fmt or "sheet" in fmt:
             # Resolve relative <image src=...> references against the YAML
             # source's directory when known; fall back to cwd. (In practice
             # wireviz.parse() rewrites relative image paths to absolute
@@ -1210,13 +1292,13 @@ class Harness:
         if "gv" in fmt:
             outputs["gv"] = graph.source
 
-        if "tsv" in fmt or "csv" in fmt or "html" in fmt:
+        if "tsv" in fmt or "csv" in fmt or "html" in fmt or "sheet" in fmt:
             bomlist = bom_list(self.bom())
             if "tsv" in fmt:
                 outputs["tsv"] = tuplelist2tsv(bomlist)
             if "csv" in fmt:
                 outputs["csv"] = tuplelist2csv(bomlist)
-            if "html" in fmt:
+            if "html" in fmt or "sheet" in fmt:
                 # Inline PNG as base64 in the HTML only when the PNG was
                 # rendered in this same call; otherwise let the template
                 # fall back to reading {output_dir}/{output_name}.png.
@@ -1225,7 +1307,7 @@ class Harness:
                     if png_bytes is not None
                     else None
                 )
-                outputs["html"] = generate_html_output(
+                html_page = generate_html_output(
                     svg_str,
                     bomlist,
                     self.metadata,
@@ -1237,6 +1319,14 @@ class Harness:
                     template_dir=template_dir,
                     untrusted=self.untrusted,
                 )
+                if "html" in fmt:
+                    outputs["html"] = html_page
+                if "sheet" in fmt:
+                    # print-ready PDF of the HTML page (upstream #32, #304)
+                    outputs["sheet"] = html_to_pdf(
+                        html_page,
+                        timeout=UNTRUSTED_RENDER_TIMEOUT if self.untrusted else None,
+                    )
 
         return outputs
 

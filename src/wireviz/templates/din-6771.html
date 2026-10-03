@@ -34,8 +34,13 @@
 
     /* Canvas size based on DIN 823 / DIN 6771 / EN ISO 5457 */
 
+    /* The frame is a column: the diagram takes the space left above the
+       footer (BOM + title block), so the diagram never overlaps them. */
     #frame {
       position: relative;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
     }
 
     .A4, .sheetsize_default { /* portrait */
@@ -54,29 +59,37 @@
     }
 
     #diagram {
-      position: relative;
-      top: 0;
-      left: 0;
-      max-width: 100%;
-      height: calc(100% - 13 * 4.25mm);
-      /* TODO: auto-adapt to height of title block + BOM table;
-               BOM table might be above (A4) or to the left (A3 and larger) of the title block */
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
       text-align: center;
-      vertical-align: middle;
     }
 
-    #diagram svg, #diagram img {
-      max-width: 95%;
-      max-height: 100%;
-      position: relative;
-      top: 50%;
-      transform: translateY(-50%);
+    #drawing {
+      flex: 1 1 auto;
+      min-height: 0;
+      padding: 3mm;
     }
 
-    #titleblock {
-      position: absolute;
-      bottom: 0mm;
-      right: -0mm;
+    #drawing svg, #drawing img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    /* A4: BOM on top of the title block; A3 and larger: BOM to its left */
+    #footer {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+
+    .A3 #footer, .A2 #footer {
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: flex-end;
     }
 
     #titleblock table {
@@ -86,18 +99,6 @@
 
     #titleblock tr, #bom tr {
       height: 4.25mm;
-    }
-
-    .A4 #bom { /* BOM on top of title block */
-      position: absolute;
-      bottom: 38.25mm;
-      right: 0;
-    }
-
-    .A3 #bom, .A2 #bom { /* BOM to the left of title block */
-      position: absolute;
-      bottom: 0mm;
-      left: 0mm;
     }
 
     #bom table {
@@ -164,12 +165,14 @@
   </style>
   <style type="text/css" media="print">
 
-    @page {
-      size: auto;
-      margin: 0;
-    }
+    /* One named page per sheet size, so a browser and WeasyPrint print
+       exactly one sheet: frame + 20 mm filing margin left, 10 mm elsewhere. */
+    @page { size: A4 portrait; margin: 0; }
+    @page A3 { size: A3 landscape; margin: 0; }
+    @page A2 { size: A2 landscape; margin: 0; }
+    .page_A3 { page: A3; }
+    .page_A2 { page: A2; }
 
-    /* TODO: auto-adjust based on portrait (larger margin on left) or landscape (larger margin on top) */
     #page {
       margin: 10mm;
       margin-left: 20mm;
@@ -178,7 +181,7 @@
   </style>
 </head>
 <body>
-  <div id="page">
+  <div id="page" class="page_<!-- %template_sheetsize% -->">
     <div id="frame" class="<!-- %template_sheetsize% -->">
 
       <div id="diagram">
@@ -187,7 +190,9 @@
           <!-- %description% -->
         </div>
 
-        <!-- %diagram% -->
+        <div id="drawing">
+          <!-- %diagram% -->
+        </div>
 
         <div id="notes">
           <!-- %notes% -->
@@ -195,6 +200,7 @@
 
       </div>
 
+      <div id="footer">
       <div id="bom">
         <!-- %bom_reversed% -->
       </div>
@@ -279,6 +285,7 @@
           </tr>
         </table>
       </div> <!-- /titleblock -->
+      </div> <!-- /footer -->
 
     </div> <!-- /frame -->
   </div> <!-- /page -->

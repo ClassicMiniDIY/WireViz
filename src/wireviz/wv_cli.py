@@ -5,13 +5,17 @@ import sys
 from pathlib import Path
 
 import click
+import yaml
 
 if __name__ == "__main__":
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from graphviz import ExecutableNotFound
+
 import wireviz.wireviz as wv
 from wireviz import APP_NAME, __version__
 from wireviz.Harness import read_yaml_from_png
+from wireviz.wv_errors import WireVizRenderError
 from wireviz.wv_helper import file_read_text
 
 format_codes = {
@@ -20,6 +24,7 @@ format_codes = {
     "h": "html",
     "p": "png",
     "P": "pdf",
+    "D": "sheet",
     "s": "svg",
     "t": "tsv",
 }
@@ -80,6 +85,15 @@ epilog += ", ".join([f"{key} ({value.upper()})" for key, value in format_codes.i
     help="Do not embed the source YAML in PNG output as an iTXt chunk.",
 )
 @click.option(
+    "-I",
+    "--include-path",
+    "include_paths",
+    multiple=True,
+    type=Path,
+    help="Directory searched for files named in include: (after the "
+    "including file's directory). Repeatable.",
+)
+@click.option(
     "--disable-key",
     "disable_keys",
     multiple=True,
@@ -87,6 +101,12 @@ epilog += ", ".join([f"{key} ({value.upper()})" for key, value in format_codes.i
     help="Drop an attribute from every connector and cable (e.g. image), "
     "or from one (e.g. X1.image, where X1 is the key under connectors: or "
     "cables:). Repeatable.",
+)
+@click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Show a Python traceback for errors in the input.",
 )
 @click.option(
     "-V",
@@ -103,7 +123,9 @@ def wireviz(
     output_name,
     template_dir,
     embed_yaml,
+    include_paths,
     disable_keys,
+    debug,
     version,
 ):
     """
@@ -248,19 +270,40 @@ def wireviz(
                 err=True,
             )
 
-        wv.parse(
-            yaml_input,
-            output_formats=output_formats,
-            output_dir=_output_dir,
-            output_name=_output_name,
-            image_paths=image_paths,
-            source_path=file,
-            template_dir=template_dir,
-            embed_yaml=embed_yaml,
-            disable_keys=disable_keys,
-        )
+        try:
+            _parse_for_cli(
+                yaml_input,
+                output_formats=output_formats,
+                output_dir=_output_dir,
+                output_name=_output_name,
+                image_paths=image_paths,
+                source_path=file,
+                template_dir=template_dir,
+                embed_yaml=embed_yaml,
+                disable_keys=disable_keys,
+                include_paths=list(include_paths),
+            )
+        except Exception as exc:
+            # An error in the input or the environment (missing Graphviz or
+            # WeasyPrint): one clear line, no traceback (#505). Anything
+            # else is a bug and keeps its traceback.
+            known = (
+                ValueError,
+                TypeError,
+                yaml.YAMLError,
+                FileNotFoundError,
+                WireVizRenderError,  # Graphviz/WeasyPrint failed or is missing
+                ExecutableNotFound,  # Graphviz not installed
+            )
+            if debug or not (isinstance(exc, known) or type(exc) is Exception):
+                raise
+            raise click.ClickException(f"{file}: {exc}") from exc
 
     click.echo("", err=True)
+
+
+def _parse_for_cli(*args, **kwargs):
+    return wv.parse(*args, **kwargs)
 
 
 if __name__ == "__main__":

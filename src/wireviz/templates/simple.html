@@ -20,6 +20,12 @@
     }
 
   </style>
+  <style media="print">
+    /* Fit the diagram to the page width when printed or rendered as a
+       sheet PDF (-f D). */
+    @page { size: auto; margin: 15mm; }
+    svg, img { max-width: 100%; height: auto; }
+  </style>
 </head><body style="font-family:<!-- %fontname% -->;background-color:<!-- %bgcolor% -->">
 <h1><!-- %title% --></h1>
 <h2>Diagram</h2>

@@ -41,6 +41,8 @@ Note that there must be one single space between `--` and `%` at both ends.
 | `<!-- %diagram% -->`       | Embedded SVG diagram as valid HTML |
 | `<!-- %diagram_png_b64% -->`  | Embedded base64 encoded PNG diagram as URI |
 | `<!-- %revision% -->`         | Name (key) of the last entry in `metadata.revisions`, or empty string |
+| `<!-- %date% -->`             | Today's date, `YYYY-MM-DD` |
+| `<!-- %template_sheetsize% -->` | `metadata.template.sheetsize` (`A4` when not set) |
 | `<!-- %{item}% -->`           | String or numeric value of `metadata.{item}` |
 | `<!-- %{item}_{i}% -->`       | Category number `{i}` within dict value of `metadata.{item}` |
 | `<!-- %{item}_{i}_{key}% -->` | Value of `metadata.{item}.{category}.{key}` |
